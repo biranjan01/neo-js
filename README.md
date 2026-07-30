@@ -1,6 +1,6 @@
-# Srishti Neoantigen Pipeline — Web Version
+# NeoPeptide — Neoantigen Vaccine Prediction Pipeline
 
-Next.js web application for the Srishti Neoantigen Vaccine Prediction Pipeline.
+Next.js web application for neoepitope vaccine prediction for cancer immunotherapy research.
 
 ## Current Steps (1-2)
 
