@@ -15,49 +15,39 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'No file uploaded' }, { status: 400 });
     }
 
-    // Validate file type
     if (!file.name.endsWith('.csv')) {
       return NextResponse.json({ error: 'Please upload a CSV file' }, { status: 400 });
     }
 
-    // Read file content
     const csvText = await file.text();
     console.log(`Processing ${file.name} (${csvText.length} bytes) for gene: ${geneName}`);
 
-    // Step 1: Parse mutations
+    // Step 1
     console.log('--- Step 1: Parsing mutations ---');
     const step1 = step1ParseMutations(csvText, geneName);
 
     if (!step1.success) {
       return NextResponse.json(
-        {
-          error: step1.error,
-          step: 1,
-          totalRows: step1.totalRows,
-        },
+        { error: step1.error, step: 1, totalRows: step1.totalRows },
         { status: 400 }
       );
     }
 
-    // Step 2: Frequency analysis
+    // Step 2
     console.log('--- Step 2: Analyzing frequency ---');
     const step2 = step2AnalyzeFrequency(step1.missense);
 
     if (!step2.success) {
-      return NextResponse.json(
-        { error: step2.error, step: 2 },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: step2.error, step: 2 }, { status: 400 });
     }
 
-    // Generate CSV outputs
     const missenseCSV = missenseToCSV(step1.missense);
     const frequencyCSV = frequencyToCSV(step2.summary);
 
-    // Return results
     return NextResponse.json({
       success: true,
       geneName,
+      step: 2,
       stats: {
         totalRawRows: step1.totalRows,
         totalMissense: step1.totalMissense,

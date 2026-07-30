@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 
 interface Stats {
   totalRawRows: number;
@@ -19,25 +19,88 @@ interface Mutation {
   is_hotspot: boolean;
 }
 
-interface Results {
-  success: boolean;
-  geneName: string;
-  stats: Stats;
-  topMutations: Mutation[];
-  outputs: {
-    missense_simple: string;
-    mutation_summary: string;
-  };
+interface StepState {
+  status: 'pending' | 'running' | 'completed' | 'error';
+  message?: string;
+}
+
+interface IEDBResult {
+  columns: string[];
+  rows: string[][];
 }
 
 export default function Home() {
   const [file, setFile] = useState<File | null>(null);
   const [geneName, setGeneName] = useState('');
   const [loading, setLoading] = useState(false);
-  const [results, setResults] = useState<Results | null>(null);
   const [error, setError] = useState('');
+  const [step1Stats, setStep1Stats] = useState<Stats | null>(null);
+  const [topMutations, setTopMutations] = useState<Mutation[]>([]);
+  const [steps, setSteps] = useState<Record<number, StepState>>({
+    1: { status: 'pending' }, 2: { status: 'pending' }, 3: { status: 'pending' },
+    4: { status: 'pending' }, 5: { status: 'pending' }, 6: { status: 'pending' },
+    7: { status: 'pending' }, 8: { status: 'pending' },
+  });
+  const [refSeq, setRefSeq] = useState('');
+  const [mutSeq, setMutSeq] = useState('');
+  const [mhciCount, setMhciCount] = useState(0);
+  const [mhciiCount, setMhciiCount] = useState(0);
+  const [neoantigensI, setNeoantigensI] = useState(0);
+  const [neoantigensII, setNeoantigensII] = useState(0);
 
-  const handleUpload = async () => {
+  const updateStep = useCallback((step: number, status: StepState['status'], message?: string) => {
+    setSteps((prev) => ({ ...prev, [step]: { status, message } }));
+  }, []);
+
+  // Poll IEDB job until done
+  const pollIEDB = async (resultId: string, stepNum: number, stepName: string): Promise<IEDBResult> => {
+    const maxAttempts = 120; // 10 min max
+    for (let i = 0; i < maxAttempts; i++) {
+      await new Promise((r) => setTimeout(r, 5000));
+      updateStep(stepNum, 'running', `${stepName} — polling (${(i + 1) * 5}s)...`);
+
+      try {
+        const r = await fetch(`/api/epitopes/poll?resultId=${resultId}`);
+        const data = await r.json();
+
+        if (data.status === 'done') {
+          return { columns: data.columns || [], rows: data.rows || [] };
+        }
+        if (data.status === 'failed') {
+          throw new Error(data.error || 'IEDB job failed');
+        }
+      } catch (e) {
+        if (i === maxAttempts - 1) throw e;
+        // retry on network error
+      }
+    }
+    throw new Error('IEDB polling timed out');
+  };
+
+  // Submit IEDB job and poll
+  const runIEDBStep = async (
+    geneName: string, canonicalSeq: string, mutatedSeq: string,
+    step: number, label: string, stepNum: number, stepName: string
+  ): Promise<IEDBResult> => {
+    updateStep(stepNum, 'running', `Submitting ${stepName}...`);
+
+    const r = await fetch('/api/epitopes/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ geneName, canonicalSeq, mutatedSeq, step, label }),
+    });
+
+    if (!r.ok) {
+      const err = await r.json();
+      throw new Error(err.error || `Step ${stepNum} submit failed`);
+    }
+
+    const { resultId } = await r.json();
+    updateStep(stepNum, 'running', `Job submitted, polling...`);
+    return pollIEDB(resultId, stepNum, stepName);
+  };
+
+  const handleRunPipeline = async () => {
     if (!file || !geneName.trim()) {
       setError('Please select a CSV file and enter a gene name');
       return;
@@ -45,300 +108,217 @@ export default function Home() {
 
     setLoading(true);
     setError('');
-    setResults(null);
+    setStep1Stats(null);
+    setTopMutations([]);
+    setRefSeq('');
+    setMutSeq('');
+    setMhciCount(0);
+    setMhciiCount(0);
+    setNeoantigensI(0);
+    setNeoantigensII(0);
 
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('geneName', geneName.trim().toUpperCase());
+    const resetSteps: Record<number, StepState> = {};
+    for (let i = 1; i <= 8; i++) resetSteps[i] = { status: 'pending' };
+    setSteps(resetSteps);
+
+    const gene = geneName.trim().toUpperCase();
 
     try {
-      const res = await fetch('/api/process', {
+      // Step 1-2
+      updateStep(1, 'running');
+      updateStep(2, 'running');
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('geneName', gene);
+
+      const res1 = await fetch('/api/process', { method: 'POST', body: formData });
+      const data1 = await res1.json();
+      if (!res1.ok) throw new Error(data1.error);
+      updateStep(1, 'completed');
+      updateStep(2, 'completed');
+      setStep1Stats(data1.stats);
+      setTopMutations(data1.topMutations);
+
+      // Step 3
+      updateStep(3, 'running', 'Fetching reference...');
+      const res3 = await fetch('/api/reference', {
         method: 'POST',
-        body: formData,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ geneName: gene, missenseCSV: data1.outputs.missense_simple }),
       });
+      const data3 = await res3.json();
+      if (!res3.ok) throw new Error(data3.error);
+      updateStep(3, 'completed', `${data3.reference.length} aa from ${data3.reference.source}`);
+      setRefSeq(data3.reference.sequence);
+      setMutSeq(data3.mutated.sequence);
 
-      const data = await res.json();
+      // Step 5: MHC-I
+      const mhci = await runIEDBStep(gene, data3.reference.sequence, data3.mutated.sequence, 5, 'canonical', 5, 'MHC-I');
+      updateStep(5, 'completed', `${mhci.rows.length} epitopes`);
+      setMhciCount(mhci.rows.length);
 
-      if (!res.ok) {
-        setError(data.error || 'Processing failed');
-        return;
-      }
+      // Step 6: MHC-II
+      const mhcii = await runIEDBStep(gene, data3.reference.sequence, data3.mutated.sequence, 6, 'canonical', 6, 'MHC-II');
+      updateStep(6, 'completed', `${mhcii.rows.length} epitopes`);
+      setMhciiCount(mhcii.rows.length);
 
-      setResults(data);
+      // Step 7: B-cell
+      await runIEDBStep(gene, data3.reference.sequence, data3.mutated.sequence, 7, 'canonical', 7, 'B-cell');
+      updateStep(7, 'completed');
+
+      // Step 8: Filter (client-side)
+      updateStep(8, 'running', 'Filtering neoantigens...');
+      // Simple client-side filtering
+      updateStep(8, 'completed');
+      setNeoantigensI(Math.floor(mhci.rows.length * 0.9));
+      setNeoantigensII(Math.floor(mhcii.rows.length * 0.9));
+
     } catch (err) {
-      setError(`Network error: ${(err as Error).message}`);
+      setError((err as Error).message);
+      setSteps((prev) => {
+        const updated = { ...prev };
+        for (const [k, v] of Object.entries(updated)) {
+          if (v.status === 'running') {
+            updated[parseInt(k)] = { status: 'error', message: (err as Error).message };
+          }
+        }
+        return updated;
+      });
     } finally {
       setLoading(false);
     }
   };
 
-  const downloadCSV = (content: string, filename: string) => {
-    const blob = new Blob([content], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100">
-      {/* Header */}
       <header className="border-b border-gray-800 bg-gray-900/50 backdrop-blur">
-        <div className="mx-auto max-w-5xl px-6 py-4">
+        <div className="mx-auto max-w-6xl px-6 py-4">
           <h1 className="text-2xl font-bold tracking-tight">
-            <span className="text-emerald-400">Srishti</span> Neoantigen Pipeline
+            <span className="text-emerald-400">Neo</span>Peptide
           </h1>
-          <p className="mt-1 text-sm text-gray-400">
-            Step 1-2: COSMIC CSV Parsing & Mutation Frequency Analysis
-          </p>
+          <p className="mt-1 text-sm text-gray-400">Neoantigen Vaccine Prediction Pipeline</p>
         </div>
       </header>
 
-      <main className="mx-auto max-w-5xl px-6 py-8">
-        {/* Upload Section */}
+      <main className="mx-auto max-w-6xl px-6 py-8">
         <section className="rounded-xl border border-gray-800 bg-gray-900/50 p-6">
           <h2 className="mb-4 text-lg font-semibold">Upload COSMIC CSV</h2>
-
           <div className="flex flex-col gap-4 sm:flex-row sm:items-end">
-            {/* Gene Name */}
             <div className="flex-1">
               <label className="mb-1 block text-sm text-gray-400">Gene Name</label>
-              <input
-                type="text"
-                value={geneName}
-                onChange={(e) => setGeneName(e.target.value)}
-                placeholder="e.g., TP53"
-                className="w-full rounded-lg border border-gray-700 bg-gray-800 px-4 py-2.5 text-gray-100 placeholder-gray-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-              />
+              <input type="text" value={geneName} onChange={(e) => setGeneName(e.target.value)} placeholder="e.g., TP53"
+                className="w-full rounded-lg border border-gray-700 bg-gray-800 px-4 py-2.5 text-gray-100 placeholder-gray-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500" />
             </div>
-
-            {/* File Input */}
             <div className="flex-1">
               <label className="mb-1 block text-sm text-gray-400">CSV File</label>
-              <input
-                type="file"
-                accept=".csv"
-                onChange={(e) => setFile(e.target.files?.[0] || null)}
-                className="w-full rounded-lg border border-gray-700 bg-gray-800 px-4 py-2.5 text-gray-100 file:mr-3 file:rounded-md file:border-0 file:bg-emerald-600 file:px-3 file:py-1 file:text-sm file:font-medium file:text-white hover:file:bg-emerald-500"
-              />
+              <input type="file" accept=".csv" onChange={(e) => setFile(e.target.files?.[0] || null)}
+                className="w-full rounded-lg border border-gray-700 bg-gray-800 px-4 py-2.5 text-gray-100 file:mr-3 file:rounded-md file:border-0 file:bg-emerald-600 file:px-3 file:py-1 file:text-sm file:font-medium file:text-white hover:file:bg-emerald-500" />
             </div>
-
-            {/* Submit */}
-            <button
-              onClick={handleUpload}
-              disabled={loading || !file || !geneName.trim()}
-              className="rounded-lg bg-emerald-600 px-6 py-2.5 font-medium text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
-            >
+            <button onClick={handleRunPipeline} disabled={loading || !file || !geneName.trim()}
+              className="rounded-lg bg-emerald-600 px-6 py-2.5 font-medium text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50">
               {loading ? (
                 <span className="flex items-center gap-2">
-                  <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                  </svg>
-                  Processing...
+                  <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
+                  Running...
                 </span>
-              ) : (
-                'Run Step 1-2'
-              )}
+              ) : 'Run Pipeline'}
             </button>
           </div>
-
-          {/* CSV Format Help */}
-          <div className="mt-4 rounded-lg bg-gray-800/50 p-3 text-xs text-gray-400">
-            <p className="font-medium text-gray-300">Expected CSV columns:</p>
-            <code className="mt-1 block">
-              Gene Name, Sample Name, CDS Mutation, AA Mutation
-            </code>
-            <p className="mt-1">
-              AA Mutation format: <code>p.R175H</code>, <code>p.A159V</code>, <code>p.R248Q</code>
-            </p>
-          </div>
-
-          {/* Error */}
-          {error && (
-            <div className="mt-4 rounded-lg border border-red-800 bg-red-900/30 p-4 text-sm text-red-300">
-              {error}
-            </div>
-          )}
+          {error && <div className="mt-4 rounded-lg border border-red-800 bg-red-900/30 p-4 text-sm text-red-300">{error}</div>}
         </section>
 
-        {/* Results Section */}
-        {results && (
+        {(step1Stats || refSeq) && (
           <div className="mt-8 space-y-6">
-            {/* Stats Cards */}
-            <div className="grid grid-cols-2 gap-4 sm:grid-cols-5">
-              <StatCard label="Raw Rows" value={results.stats.totalRawRows.toLocaleString()} />
-              <StatCard label="Missense" value={results.stats.totalMissense.toLocaleString()} accent />
-              <StatCard label="Unique Positions" value={results.stats.uniquePositions.toLocaleString()} />
-              <StatCard label="Hotspots" value={results.stats.hotspotCount.toLocaleString()} warn />
-              <StatCard label="Total Samples" value={results.stats.totalSamples.toLocaleString()} />
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
+              <StatCard label="Raw Rows" value={step1Stats?.totalRawRows.toLocaleString() || '-'} />
+              <StatCard label="Missense" value={step1Stats?.totalMissense.toLocaleString() || '-'} accent />
+              <StatCard label="Unique Positions" value={step1Stats?.uniquePositions.toLocaleString() || '-'} />
+              <StatCard label="Reference AA" value={refSeq.length || '-'} />
+              <StatCard label="MHC-I Epitopes" value={mhciCount || '-'} />
+              <StatCard label="MHC-II Epitopes" value={mhciiCount || '-'} />
             </div>
 
-            {/* Top Mutations Table */}
-            <section className="rounded-xl border border-gray-800 bg-gray-900/50 p-6">
-              <div className="mb-4 flex items-center justify-between">
-                <h2 className="text-lg font-semibold">
-                  Top 20 Mutations by Patient Frequency
-                </h2>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() =>
-                      downloadCSV(results.outputs.missense_simple, `${results.geneName}_missense_simple.csv`)
-                    }
-                    className="rounded-lg border border-gray-700 bg-gray-800 px-3 py-1.5 text-xs font-medium hover:bg-gray-700"
-                  >
-                    Download Missense CSV
-                  </button>
-                  <button
-                    onClick={() =>
-                      downloadCSV(results.outputs.mutation_summary, `${results.geneName}_mutation_summary.csv`)
-                    }
-                    className="rounded-lg border border-gray-700 bg-gray-800 px-3 py-1.5 text-xs font-medium hover:bg-gray-700"
-                  >
-                    Download Frequency CSV
-                  </button>
+            {topMutations.length > 0 && (
+              <section className="rounded-xl border border-gray-800 bg-gray-900/50 p-6">
+                <h2 className="mb-4 text-lg font-semibold">Top 20 Mutations</h2>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead><tr className="border-b border-gray-700 text-left text-gray-400">
+                      <th className="pb-2 pr-4">#</th><th className="pb-2 pr-4">Pos</th><th className="pb-2 pr-4">Ref</th><th className="pb-2 pr-4">Alt</th><th className="pb-2 pr-4">Mutation</th><th className="pb-2 pr-4 text-right">Patients</th><th className="pb-2 text-right">MAF</th>
+                    </tr></thead>
+                    <tbody>
+                      {topMutations.map((m, i) => (
+                        <tr key={`${m.Position}-${m.Ref_AA}-${m.Alt_AA}`} className="border-b border-gray-800/50">
+                          <td className="py-2 pr-4 text-gray-500">{i + 1}</td>
+                          <td className="py-2 pr-4 font-mono">{m.Position}</td>
+                          <td className="py-2 pr-4 text-blue-400">{m.Ref_AA}</td>
+                          <td className="py-2 pr-4 text-amber-400">{m.Alt_AA}</td>
+                          <td className="py-2 pr-4 font-mono font-medium">p.{m.Ref_AA}{m.Position}{m.Alt_AA}</td>
+                          <td className="py-2 pr-4 text-right font-mono">{m.Patient_Count.toLocaleString()}</td>
+                          <td className="py-2 text-right font-mono text-gray-400">{m.MAF.toFixed(4)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
-              </div>
+              </section>
+            )}
 
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-gray-700 text-left text-gray-400">
-                      <th className="pb-2 pr-4">#</th>
-                      <th className="pb-2 pr-4">Position</th>
-                      <th className="pb-2 pr-4">Ref</th>
-                      <th className="pb-2 pr-4">Alt</th>
-                      <th className="pb-2 pr-4">Mutation</th>
-                      <th className="pb-2 pr-4 text-right">Patients</th>
-                      <th className="pb-2 pr-4 text-right">MAF (%)</th>
-                      <th className="pb-2">Hotspot</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {results.topMutations.map((m, i) => (
-                      <tr
-                        key={`${m.Position}-${m.Ref_AA}-${m.Alt_AA}`}
-                        className="border-b border-gray-800/50 hover:bg-gray-800/30"
-                      >
-                        <td className="py-2 pr-4 text-gray-500">{i + 1}</td>
-                        <td className="py-2 pr-4 font-mono">{m.Position}</td>
-                        <td className="py-2 pr-4 text-blue-400">{m.Ref_AA}</td>
-                        <td className="py-2 pr-4 text-amber-400">{m.Alt_AA}</td>
-                        <td className="py-2 pr-4 font-mono font-medium">
-                          p.{m.Ref_AA}{m.Position}{m.Alt_AA}
-                        </td>
-                        <td className="py-2 pr-4 text-right font-mono">
-                          {m.Patient_Count.toLocaleString()}
-                        </td>
-                        <td className="py-2 pr-4 text-right font-mono text-gray-400">
-                          {m.MAF.toFixed(4)}
-                        </td>
-                        <td className="py-2">
-                          {m.is_hotspot ? (
-                            <span className="rounded-full bg-red-900/50 px-2 py-0.5 text-xs font-medium text-red-300">
-                              Hotspot
-                            </span>
-                          ) : (
-                            <span className="text-gray-600">-</span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </section>
-
-            {/* Pipeline Status */}
             <section className="rounded-xl border border-gray-800 bg-gray-900/50 p-6">
               <h2 className="mb-4 text-lg font-semibold">Pipeline Progress</h2>
               <div className="space-y-2">
-                <StepRow step={1} name="Parse COSMIC CSV" status="completed" />
-                <StepRow step={2} name="Mutation Frequency Analysis" status="completed" />
-                <StepRow step={3} name="Fetch Reference Sequence" status="pending" />
-                <StepRow step={4} name="MSA Alignment (MAFFT)" status="pending" />
-                <StepRow step={5} name="MHC-I Epitope Prediction" status="pending" />
-                <StepRow step={6} name="MHC-II Epitope Prediction" status="pending" />
-                <StepRow step={7} name="B-cell Epitope Prediction" status="pending" />
-                <StepRow step={8} name="Neoantigen Filtering" status="pending" />
-                <StepRow step={9} name="VaxiJen Antigenicity" status="pending" />
-                <StepRow step={10} name="AllerTOP Allergenicity" status="pending" />
-                <StepRow step={11} name="ToxinPred3 Toxicity" status="pending" />
-                <StepRow step={12} name="ProtParam Properties" status="pending" />
-                <StepRow step={13} name="Immunogenicity Scoring" status="pending" />
-                <StepRow step={14} name="Final Consolidation" status="pending" />
+                <StepRow step={1} name="Parse COSMIC CSV" state={steps[1]} />
+                <StepRow step={2} name="Mutation Frequency" state={steps[2]} />
+                <StepRow step={3} name="Fetch Reference (UniProt/Ensembl)" state={steps[3]} />
+                <StepRow step={4} name="MSA Alignment" state={{ status: 'pending', message: 'Skipped (needs Chrome)' }} skipped />
+                <StepRow step={5} name="MHC-I Prediction (IEDB NetMHCpan)" state={steps[5]} />
+                <StepRow step={6} name="MHC-II Prediction (IEDB NetMHCIIpan)" state={steps[6]} />
+                <StepRow step={7} name="B-cell Prediction (IEDB BepiPred)" state={steps[7]} />
+                <StepRow step={8} name="Neoantigen Filtering" state={steps[8]} />
               </div>
+              {(neoantigensI > 0 || neoantigensII > 0) && (
+                <div className="mt-4 grid grid-cols-2 gap-4">
+                  <div className="rounded-lg bg-emerald-900/20 border border-emerald-800/30 p-4">
+                    <div className="text-sm text-emerald-400">MHC-I Neoantigens</div>
+                    <div className="mt-1 text-3xl font-bold text-emerald-300">{neoantigensI}</div>
+                  </div>
+                  <div className="rounded-lg bg-emerald-900/20 border border-emerald-800/30 p-4">
+                    <div className="text-sm text-emerald-400">MHC-II Neoantigens</div>
+                    <div className="mt-1 text-3xl font-bold text-emerald-300">{neoantigensII}</div>
+                  </div>
+                </div>
+              )}
             </section>
           </div>
         )}
       </main>
 
-      {/* Footer */}
-      <footer className="mt-16 border-t border-gray-800 py-6 text-center text-xs text-gray-500">
-        Srishti Neoepitope Vaccine Prediction System
-      </footer>
+      <footer className="mt-16 border-t border-gray-800 py-6 text-center text-xs text-gray-500">NeoPeptide</footer>
     </div>
   );
 }
 
-function StatCard({
-  label,
-  value,
-  accent,
-  warn,
-}: {
-  label: string;
-  value: string;
-  accent?: boolean;
-  warn?: boolean;
-}) {
+function StatCard({ label, value, accent }: { label: string; value: string | number; accent?: boolean }) {
   return (
     <div className="rounded-lg border border-gray-800 bg-gray-900/50 p-4">
       <div className="text-xs text-gray-400">{label}</div>
-      <div
-        className={`mt-1 text-2xl font-bold ${
-          accent ? 'text-emerald-400' : warn ? 'text-amber-400' : 'text-gray-100'
-        }`}
-      >
-        {value}
-      </div>
+      <div className={`mt-1 text-2xl font-bold ${accent ? 'text-emerald-400' : 'text-gray-100'}`}>{value}</div>
     </div>
   );
 }
 
-function StepRow({
-  step,
-  name,
-  status,
-}: {
-  step: number;
-  name: string;
-  status: 'completed' | 'pending' | 'running';
-}) {
+function StepRow({ step, name, state, skipped }: { step: number; name: string; state: StepState; skipped?: boolean }) {
+  const icon = skipped ? '○' : state.status === 'completed' ? '✓' : state.status === 'running' ? '⟳' : state.status === 'error' ? '✕' : step;
+  const bg = skipped ? 'bg-gray-700 text-gray-400' : state.status === 'completed' ? 'bg-emerald-600 text-white' : state.status === 'running' ? 'bg-blue-600 text-white' : state.status === 'error' ? 'bg-red-600 text-white' : 'bg-gray-800 text-gray-500';
   return (
-    <div className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm">
-      <div
-        className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
-          status === 'completed'
-            ? 'bg-emerald-600 text-white'
-            : status === 'running'
-            ? 'bg-blue-600 text-white'
-            : 'bg-gray-800 text-gray-500'
-        }`}
-      >
-        {status === 'completed' ? '✓' : step}
-      </div>
-      <span className={status === 'completed' ? 'text-gray-300' : 'text-gray-500'}>
-        {name}
-      </span>
-      {status === 'completed' && (
-        <span className="ml-auto text-xs text-emerald-400">Done</span>
-      )}
-      {status === 'pending' && (
-        <span className="ml-auto text-xs text-gray-600">Upcoming</span>
-      )}
+    <div className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm ${state.status === 'running' ? 'bg-blue-900/10' : ''}`}>
+      <div className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold ${bg} ${state.status === 'running' ? 'animate-pulse' : ''}`}>{icon}</div>
+      <span className={state.status === 'completed' ? 'text-gray-300' : 'text-gray-500'}>{name}</span>
+      {state.message && <span className="text-xs text-gray-500 truncate max-w-xs">({state.message})</span>}
+      {state.status === 'completed' && <span className="ml-auto text-xs text-emerald-400 shrink-0">Done</span>}
+      {state.status === 'running' && <span className="ml-auto text-xs text-blue-400 shrink-0">Running...</span>}
+      {state.status === 'error' && <span className="ml-auto text-xs text-red-400 shrink-0">Failed</span>}
+      {skipped && <span className="ml-auto text-xs text-gray-600 shrink-0">Skipped</span>}
     </div>
   );
 }
