@@ -1,5 +1,6 @@
 // Step 1: Parse COSMIC CSV and filter missense mutations
 
+import Papa from 'papaparse';
 import { ParsedMutation } from './types';
 
 const VALID_AA = new Set('ACDEFGHIKLMNPQRSTVWY'.split(''));
@@ -88,7 +89,6 @@ export function step1ParseMutations(
   geneName: string
 ): Step1Result {
   // Parse CSV using papaparse
-  const Papa = require('papaparse');
   const parsed = Papa.parse(csvText, {
     header: true,
     skipEmptyLines: true,
@@ -99,7 +99,7 @@ export function step1ParseMutations(
     console.warn('CSV parsing warnings:', parsed.errors.slice(0, 5));
   }
 
-  const rows: Record<string, string>[] = parsed.data;
+  const rows = parsed.data as Record<string, string>[];
   const columns: string[] = parsed.meta.fields || [];
 
   if (rows.length === 0) {
