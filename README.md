@@ -1,36 +1,72 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Srishti Neoantigen Pipeline — Web Version
+
+Next.js web application for the Srishti Neoantigen Vaccine Prediction Pipeline.
+
+## Current Steps (1-2)
+
+- **Step 1**: Parse COSMIC CSV, filter missense mutations
+- **Step 2**: Mutation frequency analysis, hotspot detection
 
 ## Getting Started
 
-First, run the development server:
-
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000)
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## CSV Format
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Your COSMIC mutation file must have these columns:
 
-## Learn More
+```
+Gene Name,Sample Name,CDS Mutation,AA Mutation
+TP53,SAMPLE_001,c.524G>A,p.R175H
+TP53,SAMPLE_002,c.818G>A,p.R273H
+```
 
-To learn more about Next.js, take a look at the following resources:
+- **AA Mutation**: Must start with `p.` followed by RefAA, Position, AltAA (e.g., `p.R175H`)
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Deploy to Vercel
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```bash
+# Install Vercel CLI
+npm i -g vercel
 
-## Deploy on Vercel
+# Deploy
+vercel
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Or connect your GitHub repo to Vercel for automatic deployments.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Project Structure
+
+```
+src/
+├── lib/
+│   ├── types.ts                    # Core type definitions
+│   ├── step1-parse-mutations.ts    # Step 1: CSV parsing
+│   └── step2-frequency.ts          # Step 2: Frequency analysis
+├── app/
+│   ├── layout.tsx                  # Root layout
+│   ├── page.tsx                    # Main UI
+│   ├── globals.css                 # Global styles
+│   └── api/
+│       └── process/
+│           └── route.ts            # API endpoint
+```
+
+## Next Steps
+
+- [ ] Step 3: Fetch reference sequences (UniProt/Ensembl API)
+- [ ] Step 4: MSA alignment (EBI MAFFT API)
+- [ ] Steps 5-7: Epitope prediction (IEDB API)
+- [ ] Step 8: Neoantigen filtering
+- [ ] Steps 9-12: Browser automation (needs backend)
+- [ ] Steps 13-14: Scoring and consolidation
+
+## Credits
+
+Srishti Neoepitope Vaccine Prediction System
+Managed by S. Shriya
