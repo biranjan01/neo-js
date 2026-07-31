@@ -4,10 +4,10 @@
 import os
 import re
 import time
+import traceback
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from camoufox.sync_api import Camoufox
 
 app = FastAPI(title="VaxiJen API (Camoufox)")
 
@@ -45,44 +45,42 @@ def create_fasta(sequences: list[str]) -> str:
 
 
 def submit_to_vaxijen(sequences: list[str], target: str, threshold: float) -> list[dict]:
-    """Submit sequences to VaxiJen using Camoufox and return results"""
+    from camoufox.sync_api import Camoufox
+
     fasta = create_fasta(sequences)
     results = []
 
+    print(f"[VaxiJen] Starting Camoufox for {len(sequences)} sequences...")
     with Camoufox(headless=True) as browser:
+        print("[VaxiJen] Camoufox started, navigating...")
         page = browser.new_page()
 
-        # Navigate
         page.goto(VAXIJEN_URL, wait_until="commit")
 
         # Wait for Cloudflare
-        for _ in range(30):
+        for i in range(20):
             title = page.title()
             if "moment" not in title.lower():
+                print(f"[VaxiJen] Cloudflare passed after {i*2}s")
                 break
             time.sleep(2)
         else:
             raise Exception("Cloudflare challenge did not pass")
 
-        # Wait for form
         page.wait_for_selector("textarea[name='seq']", timeout=15000)
         time.sleep(1)
 
-        # Fill form
         page.fill("textarea[name='seq']", fasta)
         page.select_option("select[name='Target']", label=target.title())
         page.fill("input[name='threshold']", str(threshold))
 
-        # Submit
         page.click("input[name='submit']")
 
-        # Wait for results
         page.wait_for_load_state("networkidle")
         time.sleep(3)
 
         content = page.content()
 
-        # Parse results
         matches = re.findall(RESULT_PATTERN, content, re.DOTALL)
 
         for i, (score, pred) in enumerate(matches):
@@ -98,14 +96,17 @@ def submit_to_vaxijen(sequences: list[str], target: str, threshold: float) -> li
 
 @app.post("/predict", response_model=VaxijenResponse)
 def predict(req: VaxijenRequest):
-    """Run VaxiJen antigenicity prediction"""
     if not req.sequences:
         raise HTTPException(status_code=400, detail="No sequences provided")
 
     try:
+        print(f"[VaxiJen] Predict called with {len(req.sequences)} sequences")
         results = submit_to_vaxijen(req.sequences, req.target, req.threshold)
+        print(f"[VaxiJen] Got {len(results)} results")
         return VaxijenResponse(success=True, predictions=results)
     except Exception as e:
+        tb = traceback.format_exc()
+        print(f"[VaxiJen] Error: {e}\n{tb}")
         return VaxijenResponse(success=False, predictions=[], error=str(e))
 
 
