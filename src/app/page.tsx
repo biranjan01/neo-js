@@ -497,14 +497,14 @@ function StepRow({ step, name, state, data, vaxijenLink }: { step: number; name:
         {state.status === 'completed' && <span className="ml-auto text-xs text-emerald-400 shrink-0">Done</span>}
         {state.status === 'running' && <span className="ml-auto text-xs text-blue-400 shrink-0">Running...</span>}
         {state.status === 'error' && <span className="ml-auto text-xs text-red-400 shrink-0">Failed</span>}
-        {state.status === 'waiting' && vaxijenLink && (
+        {vaxijenLink && state.status !== 'pending' && state.status !== 'running' && (
           <a
             href={vaxijenLink}
             target="_blank"
             rel="noopener noreferrer"
             className="ml-auto text-xs text-amber-400 shrink-0 bg-amber-900/30 px-3 py-1 rounded-lg hover:bg-amber-800/40 border border-amber-700/30"
           >
-            Open VaxiJen →
+            Open Phase 2 (Streamlit) →
           </a>
         )}
       </div>
