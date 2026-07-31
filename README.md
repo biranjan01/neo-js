@@ -1,53 +1,62 @@
 # NeoPeptide — Neoantigen Vaccine Prediction Pipeline
 
-Next.js web application for neoepitope vaccine prediction for cancer immunotherapy research.
+Complete neoepitope vaccine prediction pipeline for cancer immunotherapy research.
+
+**Status**: Full pipeline (Steps 1-14) running on Streamlit Cloud.
 
 ## Pipeline Steps
 
-| Step | Tool | Status | Purpose |
+| Step | Tool | Method | Purpose |
 |------|------|--------|---------|
-| 1 | Custom | Done | Parse COSMIC CSV, filter missense mutations |
-| 2 | Custom | Done | Mutation frequency analysis, hotspot detection |
-| 3 | UniProt/Ensembl | Done | Fetch reference sequences |
-| 4 | EBI MAFFT | Done | MSA alignment, browser-driven polling |
-| 5 | IEDB NetMHCpan 4.1 | Done | MHC-I epitope prediction (27 alleles, 9-mer) |
-| 6 | IEDB NetMHCIIpan 4.1 | Done | MHC-II epitope prediction (27 alleles, 15-mer) |
-| 7 | IEDB BepiPred 3.0 | Done | B-cell epitope prediction |
-| 8 | Custom | Done | Neoantigen filtering (client-side) |
-| 9 | VaxiJen 2.0 | Done | Antigenicity prediction (Camoufox + Xvfb + fetch) |
-| 12 | ExPASy ProtParam | Done | Physicochemical properties |
+| 1 | Custom | Python | Parse COSMIC CSV, filter missense mutations |
+| 2 | Custom | Python | Mutation frequency analysis, hotspot detection |
+| 3 | UniProt/Ensembl/NCBI | REST API | Fetch reference protein sequences |
+| 4 | EBI MAFFT | REST API | Multiple Sequence Alignment |
+| 5 | IEDB NetMHCpan 4.1 | REST API | MHC-I epitope prediction (27 alleles, 9-mer) |
+| 6 | IEDB NetMHCIIpan 4.1 | REST API | MHC-II epitope prediction (27 alleles, 15-mer) |
+| 7 | IEDB BepiPred 3.0 | REST API | Linear B-cell epitope prediction |
+| 8 | Custom | Python | Neoantigen filtering (canonical vs mutated) |
+| 9 | VaxiJen 2.0 | Camoufox + fetch() | Antigenicity prediction |
+| 10 | AllerTOP | Camoufox | Allergenicity prediction |
+| 11 | ToxinPred3 | Camoufox | Toxicity prediction |
+| 12 | ExPASy ProtParam | REST API + local | Physicochemical properties |
+| 13 | Custom | Python | Immunogenicity scoring |
+| 14 | Custom | Python | Final consolidation + ZIP download |
 
 ## Deployment
 
-### Frontend (Vercel)
-```bash
-npm install
-npm run dev
-# Production: https://neopeptide-rho.vercel.app
-```
-
-### VaxiJen Backend (Streamlit Cloud)
+### Streamlit Cloud (Full Pipeline)
 - Repo: `biranjan01/vaxijen-streamlit`
 - URL: `https://neopeptide-8k6mkfhec6jh9mrnyjxtyr.streamlit.app/`
-- Uses Camoufox + Xvfb (non-headless) to bypass Cloudflare Turnstile
-- Posts to VaxiJen CGI endpoint via browser `fetch()`
-- Supports checkpoint/resume for large datasets
+- All 14 steps run server-side
+- Camoufox + Xvfb for Cloudflare-protected tools
+- Checkpoint/resume for large datasets
+
+### Next.js (Phase 1 Only — Steps 1-8)
+- Repo: `biranjan01/neopeptide`
+- URL: `https://neopeptide-rho.vercel.app`
+- Steps 1-8 only, redirects to Streamlit for Phase 2
 
 ## Architecture
 
 ```
-User Browser (Vercel)
-  │
-  ├── Steps 1-4: Serverless API routes (polling EBI MAFFT)
-  ├── Steps 5-7: IEDB Next-Gen API (chunked for >2000 aa)
-  ├── Step 8: Client-side filtering
-  ├── Step 9: Redirect to Streamlit Cloud → Camoufox → VaxiJen CGI
-  └── Step 12: ExPASy ProtParam API (concurrent requests)
+Streamlit Cloud (single app)
+  ├── Steps 1-2: CSV parsing + frequency (pandas)
+  ├── Step 3: Reference fetch (UniProt → Ensembl → NCBI)
+  ├── Step 4: MSA alignment (EBI MAFFT polling)
+  ├── Steps 5-7: IEDB epitope prediction (chunked, 2000aa)
+  ├── Step 8: Neoantigen filtering
+  ├── Step 9: VaxiJen (Camoufox non-headless + Xvfb)
+  ├── Step 10: AllerTOP (Camoufox)
+  ├── Step 11: ToxinPred (Camoufox)
+  ├── Step 12: ProtParam (ExPASy API + local fallback)
+  ├── Step 13: Immunogenicity scoring
+  └── Step 14: Consolidation + ZIP download
 ```
 
 ## Large Sequence Handling
 
-Steps 5-7 automatically chunk sequences >2000 aa with 20aa overlap to prevent IEDB timeouts. Chunk results are merged and deduplicated by (peptide, allele) key. No manual intervention needed.
+Steps 5-7 automatically chunk sequences >2000 aa with 20aa overlap to prevent IEDB timeouts. Chunk results are merged and deduplicated by (peptide, allele) key.
 
 ## CSV Format
 
@@ -60,27 +69,11 @@ TP53,SAMPLE_001,c.524G>A,p.R175H
 
 - **AA Mutation**: Must start with `p.` followed by RefAA, Position, AltAA
 
-## Project Structure
+## 27 Alleles
 
-```
-neopeptide/
-├── src/
-│   ├── lib/
-│   │   ├── types.ts                    # Core type definitions
-│   │   ├── step1-parse-mutations.ts    # CSV parsing
-│   │   ├── step2-frequency.ts          # Frequency analysis
-│   │   ├── step3-reference.ts          # Reference sequence fetch
-│   │   ├── step4-msa.ts                # MSA alignment (EBI MAFFT)
-│   │   ├── step5-7-epitopes.ts         # IEDB epitope prediction (chunked)
-│   │   ├── step8-filter-neoantigens.ts # Neoantigen filtering
-│   │   ├── step9-vaxijen.ts            # VaxiJen client + local fallback
-│   │   └── step12-protparam.ts         # ProtParam ExPASy API
-│   └── app/
-│       ├── page.tsx                    # Main UI
-│       └── api/                        # API routes
-├── browser-service/                    # VaxiJen Camoufox server
-└── package.json
-```
+**MHC-I (NetMHCpan 4.1)**: HLA-A*01:01, A*02:01, A*02:03, A*02:06, A*03:01, A*11:01, A*23:01, A*24:02, A*26:01, A*30:01, A*30:02, A*31:01, A*32:01, A*33:01, A*68:01, A*68:02, B*07:02, B*08:01, B*15:01, B*35:01, B*40:01, B*44:02, B*44:03, B*51:01, B*53:01, B*57:01, B*58:01
+
+**MHC-II (NetMHCIIpan 4.1)**: DRB1*01:01, DRB1*03:01, DRB1*04:01, DRB1*04:05, DRB1*07:01, DRB1*08:02, DRB1*09:01, DRB1*11:01, DRB1*12:01, DRB1*13:02, DRB1*15:01, DRB3*01:01, DRB3*02:02, DRB4*01:01, DRB5*01:01, DQA1*05:01/DQB1*02:01, DQA1*05:01/DQB1*03:01, DQA1*03:01/DQB1*03:02, DQA1*04:01/DQB1*04:02, DQA1*01:01/DQB1*05:01, DQA1*01:02/DQB1*06:02, DPA1*02:01/DPB1*01:01, DPA1*01:03/DPB1*02:01, DPA1*01:03/DPB1*04:01, DPA1*03:01/DPB1*04:02, DPA1*02:01/DPB1*05:01, DPA1*02:01/DPB1*14:01
 
 ## Credits
 
