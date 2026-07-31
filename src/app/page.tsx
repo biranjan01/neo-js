@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef, useEffect, Suspense } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { DataPreview, FastaPreview } from '@/components/DataPreview';
 import { step8FilterNeoantigens, neoantigensToCSV } from '@/lib/step8-filter-neoantigens';
 import { IEDBResult } from '@/lib/step5-7-epitopes';
@@ -23,7 +24,7 @@ interface Mutation {
 }
 
 interface StepState {
-  status: 'pending' | 'running' | 'completed' | 'error';
+  status: 'pending' | 'running' | 'completed' | 'error' | 'waiting';
   message?: string;
 }
 
@@ -36,6 +37,14 @@ interface StepData {
 }
 
 export default function Home() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center text-gray-400">Loading...</div>}>
+      <HomeInner />
+    </Suspense>
+  );
+}
+
+function HomeInner() {
   const [file, setFile] = useState<File | null>(null);
   const [geneName, setGeneName] = useState('');
   const [loading, setLoading] = useState(false);
@@ -56,6 +65,9 @@ export default function Home() {
   const [neoantigensI, setNeoantigensI] = useState(0);
   const [neoantigensII, setNeoantigensII] = useState(0);
   const [msaLength, setMsaLength] = useState(0);
+  const [vaxijenLink, setVaxijenLink] = useState('');
+  const [filteredPeptides, setFilteredPeptides] = useState<string[]>([]);
+  const searchParams = useSearchParams();
 
   const updateStep = useCallback((step: number, status: StepState['status'], message?: string) => {
     setSteps((prev) => ({ ...prev, [step]: { status, message } }));
@@ -64,6 +76,29 @@ export default function Home() {
   const setStepResult = useCallback((step: number, data: StepData) => {
     setStepData((prev) => ({ ...prev, [step]: data }));
   }, []);
+
+  // Handle VaxiJen results redirect back from Streamlit
+  useEffect(() => {
+    const vaxResult = searchParams.get('vaxijen_result');
+    if (vaxResult) {
+      try {
+        const decoded = JSON.parse(atob(vaxResult));
+        if (decoded.success && decoded.results) {
+          updateStep(9, 'completed', `${decoded.stats.antigens} antigens / ${decoded.stats.nonAntigens} non-antigens`);
+          const pepResults = decoded.results;
+          const columns = ['peptide', 'vaxijen_score', 'vaxijen_prediction'];
+          const rows = pepResults.map((r: { peptide: string; vaxijen_score: number; vaxijen_prediction: string }) => [
+            r.peptide, String(r.vaxijen_score), r.vaxijen_prediction,
+          ]);
+          const csv = [columns.join(','), ...rows.map((r: string[]) => r.join(','))].join('\n');
+          setStepResult(9, { columns, rows, csv });
+          window.history.replaceState({}, '', '/');
+        }
+      } catch (e) {
+        console.error('Failed to parse VaxiJen result:', e);
+      }
+    }
+  }, [searchParams, updateStep, setStepResult]);
 
   const pollIEDB = async (resultId: string, stepNum: number, stepName: string): Promise<StepData> => {
     const maxAttempts = 120;
@@ -252,28 +287,19 @@ export default function Home() {
         }
       }
 
-      // Step 9: VaxiJen Antigenicity
+      // Step 9: VaxiJen Antigenicity (auto-redirect to Streamlit Cloud)
       if (filteredPeptides.length > 0) {
-        updateStep(9, 'running', `VaxiJen on ${filteredPeptides.length} peptides...`);
-        const resVax = await fetch('/api/vaxijen', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            peptides: filteredPeptides,
-            columns: filterResult.mhcI.columns,
-            rows: filterResult.mhcI.rows,
-          }),
+        const input = JSON.stringify({
+          sequences: filteredPeptides,
+          target: 'Tumour',
+          threshold: 0.5,
+          batch_size: 5,
         });
-        const vaxData = await resVax.json();
-        if (!resVax.ok || !vaxData.success) {
-          throw new Error(vaxData.error || 'VaxiJen failed');
-        }
-        updateStep(9, 'completed', `${vaxData.stats.antigens} antigens / ${vaxData.stats.nonAntigens} non-antigens`);
-        setStepResult(9, {
-          columns: vaxData.columns || [],
-          rows: vaxData.rows || [],
-          csv: vaxData.fullCsv || '',
-        });
+        const encoded = btoa(input);
+        const url = `https://neopeptide-8k6mkfhec6jh9mrnyjxtyr.streamlit.app/?data=${encoded}`;
+        setVaxijenLink(url);
+        setFilteredPeptides(filteredPeptides);
+        updateStep(9, 'waiting', `${filteredPeptides.length} peptides ready — click link to run VaxiJen`);
       }
 
       // Step 12: ProtParam Physicochemical
@@ -403,7 +429,7 @@ export default function Home() {
                 <StepRow step={6} name="MHC-II Prediction (IEDB)" state={steps[6]} data={stepData[6]} />
                 <StepRow step={7} name="B-cell Prediction (IEDB)" state={steps[7]} data={stepData[7]} />
                 <StepRow step={8} name="Neoantigen Filtering" state={steps[8]} data={stepData[8]} />
-                <StepRow step={9} name="VaxiJen Antigenicity" state={steps[9]} data={stepData[9]} />
+                <StepRow step={9} name="VaxiJen Antigenicity" state={steps[9]} data={stepData[9]} vaxijenLink={vaxijenLink} />
                 <StepRow step={12} name="ProtParam Properties" state={steps[12]} data={stepData[12]} />
               </div>
 
@@ -438,9 +464,9 @@ function StatCard({ label, value, accent }: { label: string; value: string | num
   );
 }
 
-function StepRow({ step, name, state, data }: { step: number; name: string; state: StepState; data?: StepData }) {
-  const icon = state.status === 'completed' ? '✓' : state.status === 'running' ? '⟳' : state.status === 'error' ? '✕' : step;
-  const bg = state.status === 'completed' ? 'bg-emerald-600 text-white' : state.status === 'running' ? 'bg-blue-600 text-white' : state.status === 'error' ? 'bg-red-600 text-white' : 'bg-gray-800 text-gray-500';
+function StepRow({ step, name, state, data, vaxijenLink }: { step: number; name: string; state: StepState; data?: StepData; vaxijenLink?: string }) {
+  const icon = state.status === 'completed' ? '✓' : state.status === 'running' ? '⟳' : state.status === 'error' ? '✕' : state.status === 'waiting' ? '⏳' : step;
+  const bg = state.status === 'completed' ? 'bg-emerald-600 text-white' : state.status === 'running' ? 'bg-blue-600 text-white' : state.status === 'error' ? 'bg-red-600 text-white' : state.status === 'waiting' ? 'bg-amber-600 text-white' : 'bg-gray-800 text-gray-500';
 
   return (
     <div className="rounded-lg">
@@ -451,9 +477,18 @@ function StepRow({ step, name, state, data }: { step: number; name: string; stat
         {state.status === 'completed' && <span className="ml-auto text-xs text-emerald-400 shrink-0">Done</span>}
         {state.status === 'running' && <span className="ml-auto text-xs text-blue-400 shrink-0">Running...</span>}
         {state.status === 'error' && <span className="ml-auto text-xs text-red-400 shrink-0">Failed</span>}
+        {state.status === 'waiting' && vaxijenLink && (
+          <a
+            href={vaxijenLink}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="ml-auto text-xs text-amber-400 shrink-0 bg-amber-900/30 px-3 py-1 rounded-lg hover:bg-amber-800/40 border border-amber-700/30"
+          >
+            Open VaxiJen →
+          </a>
+        )}
       </div>
 
-      {/* Data Preview */}
       {state.status === 'completed' && data && (
         <div className="ml-9">
           {data.fasta && <FastaPreview title="FASTA Preview" fasta={data.fasta} />}
