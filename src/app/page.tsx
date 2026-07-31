@@ -47,6 +47,8 @@ export default function Home() {
   const [mhciiCount, setMhciiCount] = useState(0);
   const [neoantigensI, setNeoantigensI] = useState(0);
   const [neoantigensII, setNeoantigensII] = useState(0);
+  const [msaLength, setMsaLength] = useState(0);
+  const [msaSequences, setMsaSequences] = useState(0);
 
   const updateStep = useCallback((step: number, status: StepState['status'], message?: string) => {
     setSteps((prev) => ({ ...prev, [step]: { status, message } }));
@@ -116,6 +118,8 @@ export default function Home() {
     setMhciiCount(0);
     setNeoantigensI(0);
     setNeoantigensII(0);
+    setMsaLength(0);
+    setMsaSequences(0);
 
     const resetSteps: Record<number, StepState> = {};
     for (let i = 1; i <= 8; i++) resetSteps[i] = { status: 'pending' };
@@ -151,6 +155,40 @@ export default function Home() {
       updateStep(3, 'completed', `${data3.reference.length} aa from ${data3.reference.source}`);
       setRefSeq(data3.reference.sequence);
       setMutSeq(data3.mutated.sequence);
+
+      // Step 4: MSA via EBI MAFFT
+      updateStep(4, 'running', 'Submitting to EBI MAFFT...');
+      const resMsaSubmit = await fetch('/api/msa/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sequences: [
+            { header: `ref_${gene}`, sequence: data3.reference.sequence },
+            { header: `${gene}_mutated`, sequence: data3.mutated.sequence },
+          ],
+        }),
+      });
+      const msaSubmit = await resMsaSubmit.json();
+      if (!resMsaSubmit.ok) throw new Error(msaSubmit.error);
+
+      // Poll MSA job
+      const msaJobId = msaSubmit.jobId;
+      let msaDone = false;
+      for (let i = 0; i < 60 && !msaDone; i++) {
+        await new Promise((r) => setTimeout(r, 5000));
+        updateStep(4, 'running', `MAFFT aligning (${(i + 1) * 5}s)...`);
+        const msaPoll = await fetch(`/api/msa/poll?jobId=${msaJobId}`);
+        const msaData = await msaPoll.json();
+        if (msaData.status === 'done') {
+          updateStep(4, 'completed', `${msaData.stats.sequences} seqs, ${msaData.stats.length} columns`);
+          setMsaLength(msaData.stats.length);
+          setMsaSequences(msaData.stats.sequences);
+          msaDone = true;
+        } else if (msaData.status === 'failed') {
+          throw new Error('MSA failed');
+        }
+      }
+      if (!msaDone) throw new Error('MSA timed out');
 
       // Step 5: MHC-I
       const mhci = await runIEDBStep(gene, data3.reference.sequence, data3.mutated.sequence, 5, 'canonical', 5, 'MHC-I');
@@ -229,11 +267,12 @@ export default function Home() {
 
         {(step1Stats || refSeq) && (
           <div className="mt-8 space-y-6">
-            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-7">
               <StatCard label="Raw Rows" value={step1Stats?.totalRawRows.toLocaleString() || '-'} />
               <StatCard label="Missense" value={step1Stats?.totalMissense.toLocaleString() || '-'} accent />
               <StatCard label="Unique Positions" value={step1Stats?.uniquePositions.toLocaleString() || '-'} />
               <StatCard label="Reference AA" value={refSeq.length || '-'} />
+              <StatCard label="MSA Columns" value={msaLength || '-'} />
               <StatCard label="MHC-I Epitopes" value={mhciCount || '-'} />
               <StatCard label="MHC-II Epitopes" value={mhciiCount || '-'} />
             </div>
@@ -270,7 +309,7 @@ export default function Home() {
                 <StepRow step={1} name="Parse COSMIC CSV" state={steps[1]} />
                 <StepRow step={2} name="Mutation Frequency" state={steps[2]} />
                 <StepRow step={3} name="Fetch Reference (UniProt/Ensembl)" state={steps[3]} />
-                <StepRow step={4} name="MSA Alignment" state={{ status: 'pending', message: 'Skipped (needs Chrome)' }} skipped />
+                <StepRow step={4} name="MSA Alignment (EBI MAFFT)" state={steps[4]} />
                 <StepRow step={5} name="MHC-I Prediction (IEDB NetMHCpan)" state={steps[5]} />
                 <StepRow step={6} name="MHC-II Prediction (IEDB NetMHCIIpan)" state={steps[6]} />
                 <StepRow step={7} name="B-cell Prediction (IEDB BepiPred)" state={steps[7]} />
