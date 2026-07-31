@@ -190,28 +190,54 @@ export default function Home() {
       }
       if (!msaDone) throw new Error('MSA timed out');
 
-      // Step 5: MHC-I
-      const mhci = await runIEDBStep(gene, data3.reference.sequence, data3.mutated.sequence, 5, 'canonical', 5, 'MHC-I');
-      updateStep(5, 'completed', `${mhci.rows?.length || 0} epitopes`);
-      setMhciCount(mhci.rows?.length || 0);
-      setStepResult(5, mhci);
+      // Step 5: MHC-I (canonical + mutated)
+      updateStep(5, 'running', 'MHC-I on canonical...');
+      const mhciCanon = await runIEDBStep(gene, data3.reference.sequence, data3.mutated.sequence, 5, 'canonical', 5, 'MHC-I canonical');
+      updateStep(5, 'running', 'MHC-I on mutated...');
+      const mhciMut = await runIEDBStep(gene, data3.reference.sequence, data3.mutated.sequence, 5, 'mutated', 5, 'MHC-I mutated');
+      updateStep(5, 'completed', `${mhciMut.rows?.length || 0} mutated epitopes`);
+      setMhciCount(mhciMut.rows?.length || 0);
+      setStepResult(5, { columns: mhciMut.columns, rows: mhciMut.rows?.slice(0, 5) || [] });
 
-      // Step 6: MHC-II
-      const mhcii = await runIEDBStep(gene, data3.reference.sequence, data3.mutated.sequence, 6, 'canonical', 6, 'MHC-II');
-      updateStep(6, 'completed', `${mhcii.rows?.length || 0} epitopes`);
-      setMhciiCount(mhcii.rows?.length || 0);
-      setStepResult(6, mhcii);
+      // Step 6: MHC-II (canonical + mutated)
+      updateStep(6, 'running', 'MHC-II on canonical...');
+      const mhciiCanon = await runIEDBStep(gene, data3.reference.sequence, data3.mutated.sequence, 6, 'canonical', 6, 'MHC-II canonical');
+      updateStep(6, 'running', 'MHC-II on mutated...');
+      const mhciiMut = await runIEDBStep(gene, data3.reference.sequence, data3.mutated.sequence, 6, 'mutated', 6, 'MHC-II mutated');
+      updateStep(6, 'completed', `${mhciiMut.rows?.length || 0} mutated epitopes`);
+      setMhciiCount(mhciiMut.rows?.length || 0);
+      setStepResult(6, { columns: mhciiMut.columns, rows: mhciiMut.rows?.slice(0, 5) || [] });
 
-      // Step 7: B-cell
-      const bcell = await runIEDBStep(gene, data3.reference.sequence, data3.mutated.sequence, 7, 'canonical', 7, 'B-cell');
+      // Step 7: B-cell (canonical + mutated)
+      updateStep(7, 'running', 'B-cell on canonical...');
+      const bcellCanon = await runIEDBStep(gene, data3.reference.sequence, data3.mutated.sequence, 7, 'canonical', 7, 'B-cell canonical');
+      updateStep(7, 'running', 'B-cell on mutated...');
+      const bcellMut = await runIEDBStep(gene, data3.reference.sequence, data3.mutated.sequence, 7, 'mutated', 7, 'B-cell mutated');
       updateStep(7, 'completed');
-      setStepResult(7, bcell);
+      setStepResult(7, { columns: bcellMut.columns, rows: bcellMut.rows?.slice(0, 5) || [] });
 
-      // Step 8: Filter (client-side)
+      // Step 8: Real filtering via API
       updateStep(8, 'running', 'Filtering neoantigens...');
-      updateStep(8, 'completed');
-      setNeoantigensI(Math.floor((mhci.rows?.length || 0) * 0.9));
-      setNeoantigensII(Math.floor((mhcii.rows?.length || 0) * 0.9));
+      const resFilter = await fetch('/api/filter', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          canonicalMHCI: { success: true, columns: mhciCanon.columns || [], rows: mhciCanon.rows || [] },
+          mutatedMHCI: { success: true, columns: mhciMut.columns || [], rows: mhciMut.rows || [] },
+          canonicalMHCII: { success: true, columns: mhciiCanon.columns || [], rows: mhciiCanon.rows || [] },
+          mutatedMHCII: { success: true, columns: mhciiMut.columns || [], rows: mhciiMut.rows || [] },
+        }),
+      });
+      const filterData = await resFilter.json();
+      if (!resFilter.ok) throw new Error(filterData.error);
+      updateStep(8, 'completed', `${filterData.mhcI?.neoantigens || 0} MHC-I + ${filterData.mhcII?.neoantigens || 0} MHC-II`);
+      setNeoantigensI(filterData.mhcI?.neoantigens || 0);
+      setNeoantigensII(filterData.mhcII?.neoantigens || 0);
+      setStepResult(8, {
+        columns: filterData.mhcI?.columns || [],
+        rows: filterData.mhcI?.rows || [],
+        csv: filterData.mhcI?.csv || '',
+      });
 
     } catch (err) {
       setError((err as Error).message);
