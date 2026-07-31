@@ -98,6 +98,33 @@ function HomeInner() {
         console.error('Failed to parse VaxiJen result:', e);
       }
     }
+
+    // Handle VaxiJen gist redirect from Streamlit
+    const vaxGist = searchParams.get('vaxijen_gist');
+    if (vaxGist) {
+      updateStep(9, 'running', 'Fetching VaxiJen results from gist...');
+      fetch(vaxGist)
+        .then((r) => r.json())
+        .then((decoded: any) => {
+          if (decoded.success && decoded.results) {
+            updateStep(9, 'completed', `${decoded.stats.antigens} antigens / ${decoded.stats.nonAntigens} non-antigens`);
+            const pepResults = decoded.results;
+            const columns = ['peptide', 'vaxijen_score', 'vaxijen_prediction'];
+            const rows = pepResults.map((r: { peptide: string; vaxijen_score: number; vaxijen_prediction: string }) => [
+              r.peptide, String(r.vaxijen_score), r.vaxijen_prediction,
+            ]);
+            const csv = [columns.join(','), ...rows.map((r: string[]) => r.join(','))].join('\n');
+            setStepResult(9, { columns, rows, csv });
+            window.history.replaceState({}, '', '/');
+          } else {
+            updateStep(9, 'error', 'Invalid gist data');
+          }
+        })
+        .catch((e) => {
+          console.error('Failed to fetch gist:', e);
+          updateStep(9, 'error', `Failed to fetch gist: ${e.message}`);
+        });
+    }
   }, [searchParams, updateStep, setStepResult]);
 
   const pollIEDB = async (resultId: string, stepNum: number, stepName: string): Promise<StepData> => {
@@ -294,6 +321,7 @@ function HomeInner() {
           target: 'Tumour',
           threshold: 0.5,
           batch_size: 5,
+          gene: gene,
         });
         const encoded = btoa(input);
         const url = `https://neopeptide-8k6mkfhec6jh9mrnyjxtyr.streamlit.app/?data=${encoded}`;
