@@ -314,18 +314,31 @@ function HomeInner() {
         }
       }
 
-      // Step 9: VaxiJen Antigenicity (auto-redirect to Streamlit Cloud)
+      // Step 9: VaxiJen Antigenicity (auto-redirect to Streamlit Cloud via gist)
       if (filteredPeptides.length > 0) {
-        const input = JSON.stringify({
-          sequences: filteredPeptides,
-          target: 'Tumour',
-          threshold: 0.5,
-          batch_size: 5,
-          gene: gene,
-        });
-        const encoded = btoa(input);
-        const url = `https://neopeptide-8k6mkfhec6jh9mrnyjxtyr.streamlit.app/?data=${encoded}`;
-        setVaxijenLink(url);
+        updateStep(9, 'waiting', `Uploading ${filteredPeptides.length} peptides for VaxiJen...`);
+        try {
+          const storeRes = await fetch('/api/vaxijen-store', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              sequences: filteredPeptides,
+              target: 'Tumour',
+              threshold: 0.5,
+              batch_size: 5,
+              gene: gene,
+            }),
+          });
+          const storeData = await storeRes.json();
+          if (storeData.success && storeData.gist_url) {
+            const url = `https://neopeptide-8k6mkfhec6jh9mrnyjxtyr.streamlit.app/?input_gist=${storeData.gist_url}`;
+            setVaxijenLink(url);
+          } else {
+            throw new Error(storeData.error || 'Failed to create gist');
+          }
+        } catch (e: any) {
+          updateStep(9, 'error', `Failed to upload: ${e.message}`);
+        }
         setFilteredPeptides(filteredPeptides);
         updateStep(9, 'waiting', `${filteredPeptides.length} peptides ready — click link to run VaxiJen`);
       }
