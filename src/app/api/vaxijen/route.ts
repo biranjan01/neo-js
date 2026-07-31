@@ -1,6 +1,6 @@
 // API Route: POST /api/vaxijen
 // Step 9: VaxiJen Antigenicity Prediction
-// Uses Stagehand (open source) + Browserbase (free tier)
+// Calls Camoufox-based VaxiJen API server
 // Citation: Doyon et al., BMC Bioinformatics 9:4 (2008)
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -18,21 +18,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    console.log(`--- Step 9: VaxiJen (Stagehand + Browserbase) ---`);
+    console.log(`--- Step 9: VaxiJen (Camoufox) ---`);
     console.log(`  Peptides: ${peptides.length}`);
 
-    const apiKey = process.env.BROWSERBASE_API_KEY;
-    if (!apiKey) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: 'BROWSERBASE_API_KEY not configured. Sign up at https://www.browserbase.com (free tier) and add to .env.local',
-        },
-        { status: 500 }
-      );
-    }
-
-    const vaxResult = await runVaxijen(peptides, apiKey);
+    const vaxResult = await runVaxijen(peptides);
 
     if (!vaxResult.success) {
       return NextResponse.json({
@@ -41,7 +30,6 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Merge results into rows if provided
     let mergedColumns = columns || [];
     let mergedRows = rows || [];
 
