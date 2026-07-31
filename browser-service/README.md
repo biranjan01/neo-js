@@ -1,52 +1,67 @@
-# Browser Service on Oracle Cloud (Free Forever)
+# Browser Service — FlareSolverr (Open Source)
 
-## Step 1: Create Oracle Cloud Account
+Free, unlimited Cloudflare bypass for VaxiJen. No API key needed.
 
-1. Go to https://cloud.oracle.com
-2. Sign up (free tier, no credit card charged)
-3. Create a **VM.Standard.E2.1.Micro** ARM instance (always free)
+## What is FlareSolverr?
 
-## Step 2: SSH into your VM
+- **Open source** (MIT license, 15k GitHub stars)
+- Bypasses Cloudflare Turnstile challenges
+- Uses undetected-chromedriver (Chrome)
+- Docker container, runs anywhere
+- **No API key, no usage limits**
 
-```bash
-ssh -i your-key.pem ubuntu@your-vm-ip
-```
+## Deploy to Render (Free)
 
-## Step 3: Install Docker
+1. Go to https://render.com
+2. Sign up with GitHub
+3. Click **"New"** → **"Web Service"**
+4. Connect your GitHub repo
+5. Settings:
+   - **Name:** `flaresolverr`
+   - **Runtime:** Docker
+   - **Dockerfile:** `browser-service/Dockerfile`
+   - **Instance:** Free (512 MB RAM)
+6. Click **"Create Web Service"**
+7. Copy the URL (e.g., `https://flaresolverr.onrender.com`)
 
-```bash
-sudo apt update && sudo apt install -y docker.io
-sudo systemctl start docker
-sudo systemctl enable docker
-```
+## Add to Vercel
 
-## Step 4: Run Browserless
-
-```bash
-sudo docker run -d \
-  --name browserless \
-  --restart always \
-  -p 3000:3000 \
-  -e "TOKEN=none" \
-  -e "CONCURRENT=2" \
-  -e "MAX_QUEUE_LENGTH=100" \
-  ghcr.io/browserless/chromium:latest
-```
-
-## Step 5: Open Port 3000
-
-In Oracle Cloud console:
-1. Go to your VM → Virtual Cloud Network → Security Lists
-2. Add Ingress Rule: Source CIDR `0.0.0.0/0`, Destination Port `3000`
-
-## Step 6: Set Environment Variable in Vercel
+Settings → Environment Variables:
 
 ```
-BROWSERLESS_URL=http://your-vm-ip:3000
+FLARESOLVERR_URL=https://flaresolverr.onrender.com
 ```
+
+## How It Works
+
+```
+Vercel → FlareSolverr → VaxiJen (Cloudflare) → Results
+```
+
+1. Your Vercel app sends a POST request to FlareSolverr
+2. FlareSolverr opens a real Chrome browser
+3. Chrome navigates to VaxiJen and solves Cloudflare
+4. FlareSolverr submits the form and gets results
+5. Results are returned to your Vercel app
 
 ## Free Tier Limits
 
-- **Oracle Cloud**: Always free (4 GB RAM, 4 ARM cores)
-- **Browserless**: Unlimited requests
+- **Render Free:** 750 hrs/month, 512 MB RAM
+- **FlareSolverr:** Unlimited requests
 - **No API key needed**
+
+## Test It
+
+```bash
+# Health check
+curl https://your-app.onrender.com
+
+# Test VaxiJen request
+curl -X POST https://your-app.onrender.com/v1 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "cmd": "request.get",
+    "url": "https://www.ddg-pharmfac.net/vaxijen/VaxiJen/VaxiJen.cgi",
+    "maxTimeout": 60000
+  }'
+```

@@ -1,6 +1,6 @@
 // API Route: POST /api/vaxijen
 // Step 9: VaxiJen Antigenicity Prediction
-// Uses ScrapingBee to bypass Cloudflare (free tier: 1000 credits)
+// Uses FlareSolverr (open source) to bypass Cloudflare
 // Citation: Doyon et al., BMC Bioinformatics 9:4 (2008)
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -18,21 +18,21 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    console.log(`--- Step 9: VaxiJen (ScrapingBee) ---`);
+    console.log(`--- Step 9: VaxiJen (FlareSolverr) ---`);
     console.log(`  Peptides: ${peptides.length}`);
 
-    const apiKey = process.env.SCRAPINGBEE_API_KEY;
-    if (!apiKey) {
+    const flaresolverrUrl = process.env.FLARESOLVERR_URL;
+    if (!flaresolverrUrl) {
       return NextResponse.json(
         {
           success: false,
-          error: 'SCRAPINGBEE_API_KEY not configured. Sign up at https://www.scrapingbee.com (free 1000 credits) and add to .env.local',
+          error: 'FLARESOLVERR_URL not configured. Deploy FlareSolverr (open source) and set in .env.local. See browser-service/README.md',
         },
         { status: 500 }
       );
     }
 
-    const vaxResult = await runVaxijen(peptides, apiKey);
+    const vaxResult = await runVaxijen(peptides, flaresolverrUrl);
 
     if (!vaxResult.success) {
       return NextResponse.json({
