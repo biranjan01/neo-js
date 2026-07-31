@@ -19,15 +19,17 @@ export async function POST(request: NextRequest) {
     console.log(`--- Step 9: VaxiJen ---`);
     console.log(`  Peptides: ${peptides.length}`);
 
-    const browserlessToken = process.env.BROWSERLESS_TOKEN;
-    if (!browserlessToken) {
+    const browserlessToken = process.env.BROWSERLESS_TOKEN || 'none';
+    const browserlessUrl = process.env.BROWSERLESS_URL;
+
+    if (!browserlessUrl && !process.env.BROWSERLESS_TOKEN) {
       return NextResponse.json(
-        { error: 'BROWSERLESS_TOKEN not configured. Sign up at https://browserless.io (free tier) and add the token to .env.local' },
+        { error: 'Browser service not configured. Deploy browser-service to Railway and set BROWSERLESS_URL in .env.local. See browser-service/README.md' },
         { status: 500 }
       );
     }
 
-    const vaxResult = await runVaxijen(peptides, browserlessToken);
+    const vaxResult = await runVaxijen(peptides, browserlessToken, browserlessUrl);
 
     if (!vaxResult.success) {
       return NextResponse.json({

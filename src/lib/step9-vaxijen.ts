@@ -103,24 +103,29 @@ export default async ({ page, context }) => {
 
 /**
  * Submit a batch of peptides to VaxiJen via Browserless
+ * Supports both self-hosted (BROWSERLESS_URL) and cloud (BROWSERLESS_TOKEN)
  */
 async function submitBatchViaBrowserless(
   peptides: string[],
-  browserlessToken: string
+  browserlessToken: string,
+  browserlessUrl?: string
 ): Promise<Map<string, VaxijenPeptide>> {
   const results = new Map<string, VaxijenPeptide>();
   const fasta = createFasta(peptides);
 
   const code = buildVaxijenScript(fasta, peptides.length);
 
-  const response = await fetch(
-    `https://production-sfo.browserless.io/function?token=${browserlessToken}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/javascript' },
-      body: code,
-    }
-  );
+  // Use self-hosted URL if provided, otherwise use cloud
+  const baseUrl = browserlessUrl || 'https://production-sfo.browserless.io';
+  const url = browserlessUrl
+    ? `${baseUrl}/function`  // Self-hosted: no token needed
+    : `${baseUrl}/function?token=${browserlessToken}`;  // Cloud: needs token
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/javascript' },
+    body: code,
+  });
 
   if (!response.ok) {
     const errText = await response.text();
@@ -149,6 +154,7 @@ async function submitBatchViaBrowserless(
 export async function runVaxijen(
   peptides: string[],
   browserlessToken: string,
+  browserlessUrl?: string,
   batchSize: number = 50
 ): Promise<VaxijenResult> {
   const allResults: VaxijenPeptide[] = [];
@@ -164,7 +170,7 @@ export async function runVaxijen(
   for (let b = 0; b < batches.length; b++) {
     const batch = batches[b];
     try {
-      const batchResults = await submitBatchViaBrowserless(batch, browserlessToken);
+      const batchResults = await submitBatchViaBrowserless(batch, browserlessToken, browserlessUrl);
       for (const pep of batch) {
         const result = batchResults.get(pep);
         if (result) {
