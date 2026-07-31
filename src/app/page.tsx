@@ -44,6 +44,7 @@ export default function Home() {
     1: { status: 'pending' }, 2: { status: 'pending' }, 3: { status: 'pending' },
     4: { status: 'pending' }, 5: { status: 'pending' }, 6: { status: 'pending' },
     7: { status: 'pending' }, 8: { status: 'pending' },
+    9: { status: 'pending' }, 12: { status: 'pending' },
   });
   const [stepData, setStepData] = useState<Record<number, StepData>>({});
   const [refSeq, setRefSeq] = useState('');
@@ -120,7 +121,7 @@ export default function Home() {
     setStepData({});
 
     const resetSteps: Record<number, StepState> = {};
-    for (let i = 1; i <= 8; i++) resetSteps[i] = { status: 'pending' };
+    for (const i of [1, 2, 3, 4, 5, 6, 7, 8, 9, 12]) resetSteps[i] = { status: 'pending' };
     setSteps(resetSteps);
 
     const gene = geneName.trim().toUpperCase();
@@ -239,6 +240,68 @@ export default function Home() {
         csv: filterData.mhcI?.csv || '',
       });
 
+      // Extract unique peptides from filtered MHC-I neoantigens
+      const pepIdx = (filterData.mhcI?.columns || []).indexOf('peptide');
+      const filteredPeptides: string[] = [];
+      if (pepIdx >= 0 && filterData.mhcI?.rows) {
+        const seen = new Set<string>();
+        for (const row of filterData.mhcI.rows) {
+          const pep = row[pepIdx];
+          if (pep && !seen.has(pep)) {
+            seen.add(pep);
+            filteredPeptides.push(pep);
+          }
+        }
+      }
+
+      // Step 9: VaxiJen Antigenicity
+      if (filteredPeptides.length > 0) {
+        updateStep(9, 'running', `VaxiJen on ${filteredPeptides.length} peptides...`);
+        const resVax = await fetch('/api/vaxijen', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            peptides: filteredPeptides,
+            columns: filterData.mhcI?.columns || [],
+            rows: filterData.mhcI?.rows || [],
+          }),
+        });
+        const vaxData = await resVax.json();
+        if (!resVax.ok || !vaxData.success) {
+          throw new Error(vaxData.error || 'VaxiJen failed');
+        }
+        updateStep(9, 'completed', `${vaxData.stats.antigens} antigens / ${vaxData.stats.nonAntigens} non-antigens`);
+        setStepResult(9, {
+          columns: vaxData.columns || [],
+          rows: vaxData.rows || [],
+          csv: vaxData.fullCsv || '',
+        });
+      }
+
+      // Step 12: ProtParam Physicochemical
+      if (filteredPeptides.length > 0) {
+        updateStep(12, 'running', `ProtParam on ${filteredPeptides.length} peptides...`);
+        const resPP = await fetch('/api/protparam', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            peptides: filteredPeptides,
+            columns: filterData.mhcI?.columns || [],
+            rows: filterData.mhcI?.rows || [],
+          }),
+        });
+        const ppData = await resPP.json();
+        if (!resPP.ok || !ppData.success) {
+          throw new Error(ppData.error || 'ProtParam failed');
+        }
+        updateStep(12, 'completed', `${ppData.stats.stable} stable / ${ppData.stats.unstable} unstable`);
+        setStepResult(12, {
+          columns: ppData.columns || [],
+          rows: ppData.rows || [],
+          csv: ppData.fullCsv || '',
+        });
+      }
+
     } catch (err) {
       setError((err as Error).message);
       setSteps((prev) => {
@@ -342,6 +405,8 @@ export default function Home() {
                 <StepRow step={6} name="MHC-II Prediction (IEDB)" state={steps[6]} data={stepData[6]} />
                 <StepRow step={7} name="B-cell Prediction (IEDB)" state={steps[7]} data={stepData[7]} />
                 <StepRow step={8} name="Neoantigen Filtering" state={steps[8]} data={stepData[8]} />
+                <StepRow step={9} name="VaxiJen Antigenicity" state={steps[9]} data={stepData[9]} />
+                <StepRow step={12} name="ProtParam Properties" state={steps[12]} data={stepData[12]} />
               </div>
 
               {(neoantigensI > 0 || neoantigensII > 0) && (
