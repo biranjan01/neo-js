@@ -19,7 +19,15 @@ export async function POST(request: NextRequest) {
     console.log(`--- Step 9: VaxiJen ---`);
     console.log(`  Peptides: ${peptides.length}`);
 
-    const vaxResult = await runVaxijen(peptides);
+    const browserlessToken = process.env.BROWSERLESS_TOKEN;
+    if (!browserlessToken) {
+      return NextResponse.json(
+        { error: 'BROWSERLESS_TOKEN not configured. Sign up at https://browserless.io (free tier) and add the token to .env.local' },
+        { status: 500 }
+      );
+    }
+
+    const vaxResult = await runVaxijen(peptides, browserlessToken);
 
     if (!vaxResult.success) {
       return NextResponse.json({

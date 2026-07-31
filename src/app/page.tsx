@@ -2,6 +2,8 @@
 
 import { useState, useCallback } from 'react';
 import { DataPreview, FastaPreview } from '@/components/DataPreview';
+import { step8FilterNeoantigens, neoantigensToCSV } from '@/lib/step8-filter-neoantigens';
+import { IEDBResult } from '@/lib/step5-7-epitopes';
 
 interface Stats {
   totalRawRows: number;
@@ -217,35 +219,31 @@ export default function Home() {
       updateStep(7, 'completed');
       setStepResult(7, { columns: bcellMut.columns, rows: bcellMut.rows?.slice(0, 5) || [] });
 
-      // Step 8: Real filtering via API
+      // Step 8: Real filtering (client-side — no large payload to server)
       updateStep(8, 'running', 'Filtering neoantigens...');
-      const resFilter = await fetch('/api/filter', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          canonicalMHCI: { success: true, columns: mhciCanon.columns || [], rows: mhciCanon.rows || [] },
-          mutatedMHCI: { success: true, columns: mhciMut.columns || [], rows: mhciMut.rows || [] },
-          canonicalMHCII: { success: true, columns: mhciiCanon.columns || [], rows: mhciiCanon.rows || [] },
-          mutatedMHCII: { success: true, columns: mhciiMut.columns || [], rows: mhciiMut.rows || [] },
-        }),
-      });
-      const filterData = await resFilter.json();
-      if (!resFilter.ok) throw new Error(filterData.error);
-      updateStep(8, 'completed', `${filterData.mhcI?.neoantigens || 0} MHC-I + ${filterData.mhcII?.neoantigens || 0} MHC-II`);
-      setNeoantigensI(filterData.mhcI?.neoantigens || 0);
-      setNeoantigensII(filterData.mhcII?.neoantigens || 0);
+      const filterResult = step8FilterNeoantigens(
+        { success: true, columns: mhciCanon.columns || [], rows: mhciCanon.rows || [] } as IEDBResult,
+        { success: true, columns: mhciMut.columns || [], rows: mhciMut.rows || [] } as IEDBResult,
+        { success: true, columns: mhciiCanon.columns || [], rows: mhciiCanon.rows || [] } as IEDBResult,
+        { success: true, columns: mhciiMut.columns || [], rows: mhciiMut.rows || [] } as IEDBResult
+      );
+      const mhcICsv = neoantigensToCSV(filterResult.mhcI.columns, filterResult.mhcI.rows);
+      const mhcIICsv = neoantigensToCSV(filterResult.mhcII.columns, filterResult.mhcII.rows);
+      updateStep(8, 'completed', `${filterResult.mhcI.stats.neoantigensFinal} MHC-I + ${filterResult.mhcII.stats.neoantigensFinal} MHC-II`);
+      setNeoantigensI(filterResult.mhcI.stats.neoantigensFinal);
+      setNeoantigensII(filterResult.mhcII.stats.neoantigensFinal);
       setStepResult(8, {
-        columns: filterData.mhcI?.columns || [],
-        rows: filterData.mhcI?.rows || [],
-        csv: filterData.mhcI?.csv || '',
+        columns: filterResult.mhcI.columns,
+        rows: filterResult.mhcI.rows.slice(0, 50),
+        csv: mhcICsv,
       });
 
       // Extract unique peptides from filtered MHC-I neoantigens
-      const pepIdx = (filterData.mhcI?.columns || []).indexOf('peptide');
+      const pepIdx = filterResult.mhcI.columns.indexOf('peptide');
       const filteredPeptides: string[] = [];
-      if (pepIdx >= 0 && filterData.mhcI?.rows) {
+      if (pepIdx >= 0) {
         const seen = new Set<string>();
-        for (const row of filterData.mhcI.rows) {
+        for (const row of filterResult.mhcI.rows) {
           const pep = row[pepIdx];
           if (pep && !seen.has(pep)) {
             seen.add(pep);
@@ -262,8 +260,8 @@ export default function Home() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             peptides: filteredPeptides,
-            columns: filterData.mhcI?.columns || [],
-            rows: filterData.mhcI?.rows || [],
+            columns: filterResult.mhcI.columns,
+            rows: filterResult.mhcI.rows,
           }),
         });
         const vaxData = await resVax.json();
@@ -286,8 +284,8 @@ export default function Home() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             peptides: filteredPeptides,
-            columns: filterData.mhcI?.columns || [],
-            rows: filterData.mhcI?.rows || [],
+            columns: filterResult.mhcI.columns,
+            rows: filterResult.mhcI.rows,
           }),
         });
         const ppData = await resPP.json();

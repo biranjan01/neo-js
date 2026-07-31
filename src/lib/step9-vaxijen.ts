@@ -1,5 +1,5 @@
 // Step 9: VaxiJen Antigenicity Prediction
-// Uses the VaxiJen CGI API to predict protective antigens
+// Uses Browserless.io cloud browser to bypass Cloudflare and submit to VaxiJen
 
 export interface VaxijenResult {
   success: boolean;
@@ -19,8 +19,8 @@ export interface VaxijenPeptide {
 }
 
 const VAXIJEN_URL = 'https://www.ddg-pharmfac.net/vaxijen/VaxiJen/VaxiJen.cgi';
-const THRESHOLD = '0.5';
 const TARGET = 'Tumour';
+const THRESHOLD = '0.5';
 
 function createFasta(peptides: string[]): string {
   return peptides
@@ -29,49 +29,113 @@ function createFasta(peptides: string[]): string {
 }
 
 /**
- * Submit a batch of peptides to VaxiJen API
+ * Build the Browserless /function Puppeteer code that:
+ * 1. Navigates to VaxiJen
+ * 2. Fills the FASTA textarea
+ * 3. Selects Target + Threshold
+ * 4. Submits the form
+ * 5. Waits for result page
+ * 6. Extracts per-peptide scores
  */
-async function submitBatch(peptides: string[]): Promise<Map<string, VaxijenPeptide>> {
+function buildVaxijenScript(fasta: string, peptideCount: number): string {
+  return `
+export default async ({ page, context }) => {
+  const fasta = ${JSON.stringify(fasta)};
+  const count = ${peptideCount};
+
+  await page.goto("${VAXIJEN_URL}", { waitUntil: "networkidle2", timeout: 60000 });
+
+  // Fill the FASTA sequence textarea
+  await page.waitForSelector("textarea[name='sequence']", { timeout: 15000 });
+  await page.click("textarea[name='sequence']");
+  await page.keyboard.down("Control");
+  await page.keyboard.press("a");
+  await page.keyboard.up("Control");
+  await page.type("textarea[name='sequence']", fasta, { delay: 0 });
+
+  // Select Target = Tumour
+  const targetSelect = await page.$("select[name='Target']");
+  if (targetSelect) {
+    await page.select("select[name='Target']", "${TARGET}");
+  }
+
+  // Set threshold
+  const thresholdInput = await page.$("input[name='threshold']");
+  if (thresholdInput) {
+    await page.click("input[name='threshold']");
+    await page.keyboard.down("Control");
+    await page.keyboard.press("a");
+    await page.keyboard.up("Control");
+    await page.type("input[name='threshold']", "${THRESHOLD}", { delay: 0 });
+  }
+
+  // Submit
+  await Promise.all([
+    page.waitForNavigation({ waitUntil: "networkidle2", timeout: 120000 }),
+    page.click("input[type='submit'], button[type='submit']"),
+  ]);
+
+  // Wait for results to appear
+  await page.waitForFunction(
+    (cnt) => {
+      const text = document.body.innerText;
+      return (text.match(/Overall Prediction for the Protective Antigen/g) || []).length >= cnt;
+    },
+    { timeout: 120000 },
+    count
+  );
+
+  // Extract results
+  const results = await page.evaluate(() => {
+    const text = document.body.innerText;
+    const regex = /Overall Prediction for the Protective Antigen\\s*=\\s*(-?[\\d.]+)\\s*\\(([^)]+)\\)/gi;
+    const matches = [];
+    let m;
+    while ((m = regex.exec(text)) !== null) {
+      matches.push({ score: parseFloat(m[1]), prediction: m[2] });
+    }
+    return matches;
+  });
+
+  return { data: results, type: "application/json" };
+};`;
+}
+
+/**
+ * Submit a batch of peptides to VaxiJen via Browserless
+ */
+async function submitBatchViaBrowserless(
+  peptides: string[],
+  browserlessToken: string
+): Promise<Map<string, VaxijenPeptide>> {
   const results = new Map<string, VaxijenPeptide>();
   const fasta = createFasta(peptides);
 
-  const formData = new URLSearchParams();
-  formData.append('sequence', fasta);
-  formData.append('Target', TARGET);
-  formData.append('threshold', THRESHOLD);
-  formData.append('SequenceOnOff', 'on');
-  formData.append('SummaryMode', 'off');
-  formData.append('Verbose', 'off');
+  const code = buildVaxijenScript(fasta, peptides.length);
 
-  const response = await fetch(VAXIJEN_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body: formData.toString(),
-  });
+  const response = await fetch(
+    `https://production-sfo.browserless.io/function?token=${browserlessToken}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/javascript' },
+      body: code,
+    }
+  );
 
   if (!response.ok) {
-    throw new Error(`VaxiJen API returned ${response.status}`);
+    const errText = await response.text();
+    throw new Error(`Browserless returned ${response.status}: ${errText.slice(0, 200)}`);
   }
 
-  const html = await response.text();
+  const json = await response.json();
+  const matches: Array<{ score: number; prediction: string }> = json.data || [];
 
-  // Parse results from HTML
-  // Pattern: Overall Prediction for the Protective Antigen = <score> (<ANTIGEN/NON-ANTIGEN>)
-  const regex = /Overall Prediction for the Protective Antigen\s*=\s*(-?[\d.]+)\s*\(([^)]+)\)/gi;
-  const matches = [...html.matchAll(regex)];
-
-  // Extract peptide names in order
-  const pepNames = peptides;
-
-  for (let i = 0; i < matches.length && i < pepNames.length; i++) {
-    const score = parseFloat(matches[i][1]);
-    const predRaw = matches[i][2];
+  for (let i = 0; i < matches.length && i < peptides.length; i++) {
+    const predRaw = matches[i].prediction;
     const prediction = predRaw.toUpperCase().includes('NON') ? 'Non-antigen' : 'Antigen';
-    results.set(pepNames[i], {
-      peptide: pepNames[i],
-      score,
+    results.set(peptides[i], {
+      peptide: peptides[i],
+      score: matches[i].score,
       prediction,
     });
   }
@@ -80,20 +144,18 @@ async function submitBatch(peptides: string[]): Promise<Map<string, VaxijenPepti
 }
 
 /**
- * Run VaxiJen on a list of neoantigen peptides
- * Batches of 50 to avoid overwhelming the API
+ * Run VaxiJen on neoantigen peptides via Browserless cloud browser
  */
 export async function runVaxijen(
   peptides: string[],
+  browserlessToken: string,
   batchSize: number = 50
 ): Promise<VaxijenResult> {
   const allResults: VaxijenPeptide[] = [];
   const errors: string[] = [];
 
-  // Get unique peptides
   const uniquePeptides = [...new Set(peptides)];
 
-  // Process in batches
   const batches: string[][] = [];
   for (let i = 0; i < uniquePeptides.length; i += batchSize) {
     batches.push(uniquePeptides.slice(i, i + batchSize));
@@ -102,16 +164,16 @@ export async function runVaxijen(
   for (let b = 0; b < batches.length; b++) {
     const batch = batches[b];
     try {
-      const batchResults = await submitBatch(batch);
+      const batchResults = await submitBatchViaBrowserless(batch, browserlessToken);
       for (const pep of batch) {
         const result = batchResults.get(pep);
         if (result) {
           allResults.push(result);
         }
       }
-      // Small delay between batches
+      // Delay between batches to respect rate limits
       if (b < batches.length - 1) {
-        await new Promise(r => setTimeout(r, 1000));
+        await new Promise(r => setTimeout(r, 2000));
       }
     } catch (err) {
       errors.push(`Batch ${b + 1}: ${(err as Error).message}`);
@@ -135,7 +197,6 @@ export async function runVaxijen(
 
 /**
  * Merge VaxiJen results into neoantigen rows
- * Adds vaxijen_score and vaxijen_prediction columns
  */
 export function mergeVaxijenIntoRows(
   columns: string[],
@@ -145,7 +206,6 @@ export function mergeVaxijenIntoRows(
   const pepIdx = columns.indexOf('peptide');
   if (pepIdx === -1) return { columns, rows };
 
-  // Build lookup
   const lookup = new Map<string, VaxijenPeptide>();
   for (const r of vaxijenResults) {
     lookup.set(r.peptide, r);
