@@ -1,39 +1,52 @@
-# Browser Service (Self-Hosted Browserless)
+# Browser Service on Oracle Cloud (Free Forever)
 
-Free, unlimited headless browser for VaxiJen Cloudflare bypass.
+## Step 1: Create Oracle Cloud Account
 
-## Deploy to Railway (Free)
+1. Go to https://cloud.oracle.com
+2. Sign up (free tier, no credit card charged)
+3. Create a **VM.Standard.E2.1.Micro** ARM instance (always free)
 
-1. Go to https://railway.app
-2. Sign up with GitHub
-3. Click "New Project" → "Deploy from GitHub repo"
-4. Select this repo, folder: `browser-service`
-5. Railway will auto-build and deploy
-6. Copy the generated URL (e.g., `https://xxx.up.railway.app`)
+## Step 2: SSH into your VM
 
-## Set Environment Variable in Vercel
+```bash
+ssh -i your-key.pem ubuntu@your-vm-ip
+```
 
-Add to your Vercel project (Settings → Environment Variables):
+## Step 3: Install Docker
+
+```bash
+sudo apt update && sudo apt install -y docker.io
+sudo systemctl start docker
+sudo systemctl enable docker
+```
+
+## Step 4: Run Browserless
+
+```bash
+sudo docker run -d \
+  --name browserless \
+  --restart always \
+  -p 3000:3000 \
+  -e "TOKEN=none" \
+  -e "CONCURRENT=2" \
+  -e "MAX_QUEUE_LENGTH=100" \
+  ghcr.io/browserless/chromium:latest
+```
+
+## Step 5: Open Port 3000
+
+In Oracle Cloud console:
+1. Go to your VM → Virtual Cloud Network → Security Lists
+2. Add Ingress Rule: Source CIDR `0.0.0.0/0`, Destination Port `3000`
+
+## Step 6: Set Environment Variable in Vercel
 
 ```
-BROWSERLESS_TOKEN=none
-BROWSERLESS_URL=https://your-app.up.railway.app
+BROWSERLESS_URL=http://your-vm-ip:3000
 ```
 
 ## Free Tier Limits
 
-- **Railway**: 500 hrs/month free (enough for 24/7 operation)
-- **Browserless**: Unlimited requests (self-hosted)
-- **No API key needed** for self-hosted instance
-
-## How It Works
-
-The VaxiJen API route sends Puppeteer code to this service.
-The service runs a real Chrome browser, navigates to VaxiJen,
-submits the form, and returns the results.
-
-## Health Check
-
-```
-GET https://your-app.up.railway.app/health
-```
+- **Oracle Cloud**: Always free (4 GB RAM, 4 ARM cores)
+- **Browserless**: Unlimited requests
+- **No API key needed**

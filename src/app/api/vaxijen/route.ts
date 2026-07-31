@@ -1,5 +1,7 @@
 // API Route: POST /api/vaxijen
 // Step 9: VaxiJen Antigenicity Prediction
+// Uses ScrapingBee to bypass Cloudflare (free tier: 1000 credits)
+// Citation: Doyon et al., BMC Bioinformatics 9:4 (2008)
 
 import { NextRequest, NextResponse } from 'next/server';
 import { runVaxijen, mergeVaxijenIntoRows } from '@/lib/step9-vaxijen';
@@ -16,20 +18,21 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    console.log(`--- Step 9: VaxiJen ---`);
+    console.log(`--- Step 9: VaxiJen (ScrapingBee) ---`);
     console.log(`  Peptides: ${peptides.length}`);
 
-    const browserlessToken = process.env.BROWSERLESS_TOKEN || 'none';
-    const browserlessUrl = process.env.BROWSERLESS_URL;
-
-    if (!browserlessUrl && !process.env.BROWSERLESS_TOKEN) {
+    const apiKey = process.env.SCRAPINGBEE_API_KEY;
+    if (!apiKey) {
       return NextResponse.json(
-        { error: 'Browser service not configured. Deploy browser-service to Railway and set BROWSERLESS_URL in .env.local. See browser-service/README.md' },
+        {
+          success: false,
+          error: 'SCRAPINGBEE_API_KEY not configured. Sign up at https://www.scrapingbee.com (free 1000 credits) and add to .env.local',
+        },
         { status: 500 }
       );
     }
 
-    const vaxResult = await runVaxijen(peptides, browserlessToken, browserlessUrl);
+    const vaxResult = await runVaxijen(peptides, apiKey);
 
     if (!vaxResult.success) {
       return NextResponse.json({
@@ -51,9 +54,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       success: true,
       step: 9,
+      citation: 'Doyon et al., BMC Bioinformatics 9:4 (2008)',
       stats: vaxResult.stats,
       columns: mergedColumns,
-      rows: mergedRows.slice(0, 50), // First 50 for preview
+      rows: mergedRows.slice(0, 50),
       fullCsv: mergedColumns.length > 0
         ? [mergedColumns.join(','), ...mergedRows.map((r: string[]) => r.join(','))].join('\n')
         : '',
