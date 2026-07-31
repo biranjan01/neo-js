@@ -1,15 +1,9 @@
-// Edge API Route: POST /api/vaxijen
+// Edge API Route: POST /api/vaxijen-edge
 // Runs on Vercel Edge (Cloudflare CDN) — may bypass Cloudflare IP blocking
 
-export const config = {
-  runtime: 'edge',
-};
+export const runtime = 'edge';
 
-export default async function handler(req: Request) {
-  if (req.method !== 'POST') {
-    return new Response(JSON.stringify({ error: 'Method not allowed' }), { status: 405 });
-  }
-
+export async function POST(req: Request) {
   try {
     const { sequences, target = 'tumour', threshold = '0.5' } = await req.json();
 
@@ -19,7 +13,6 @@ export default async function handler(req: Request) {
 
     const fasta = sequences.map((s: string, i: number) => `>pep${i + 1}\n${s}`).join('\n');
 
-    // Submit to VaxiJen CGI
     const formData = new URLSearchParams();
     formData.append('sequence', fasta);
     formData.append('Target', target);
@@ -45,7 +38,6 @@ export default async function handler(req: Request) {
       }), { status: 200 });
     }
 
-    // Parse results
     const regex = /Overall Prediction.*?=\s*<b>\s*([\d.]+)\s*<\/b>.*?(ANTIGEN|NON-ANTIGEN)/g;
     const results: { peptide: string; vaxijen_score: number; vaxijen_prediction: string }[] = [];
     let match;
@@ -60,7 +52,7 @@ export default async function handler(req: Request) {
       }
     }
 
-    const antigens = results.filter((r: any) => r.vaxijen_prediction === 'ANTIGEN').length;
+    const antigens = results.filter((r: { vaxijen_prediction: string }) => r.vaxijen_prediction === 'ANTIGEN').length;
 
     return new Response(JSON.stringify({
       success: results.length > 0,
@@ -68,7 +60,8 @@ export default async function handler(req: Request) {
       stats: { total: results.length, antigens, nonAntigens: results.length - antigens },
       method: 'edge_fetch',
     }));
-  } catch (e: any) {
-    return new Response(JSON.stringify({ success: false, error: e.message }), { status: 200 });
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return new Response(JSON.stringify({ success: false, error: msg }), { status: 200 });
   }
 }
