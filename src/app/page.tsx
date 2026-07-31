@@ -55,7 +55,7 @@ function HomeInner() {
     1: { status: 'pending' }, 2: { status: 'pending' }, 3: { status: 'pending' },
     4: { status: 'pending' }, 5: { status: 'pending' }, 6: { status: 'pending' },
     7: { status: 'pending' }, 8: { status: 'pending' },
-    9: { status: 'pending' }, 12: { status: 'pending' },
+    9: { status: 'pending' },
   });
   const [stepData, setStepData] = useState<Record<number, StepData>>({});
   const [refSeq, setRefSeq] = useState('');
@@ -185,7 +185,7 @@ function HomeInner() {
     setStepData({});
 
     const resetSteps: Record<number, StepState> = {};
-    for (const i of [1, 2, 3, 4, 5, 6, 7, 8, 9, 12]) resetSteps[i] = { status: 'pending' };
+    for (const i of [1, 2, 3, 4, 5, 6, 7, 8, 9]) resetSteps[i] = { status: 'pending' };
     setSteps(resetSteps);
 
     const gene = geneName.trim().toUpperCase();
@@ -314,57 +314,37 @@ function HomeInner() {
         }
       }
 
-      // Step 9: VaxiJen Antigenicity (auto-redirect to Streamlit Cloud via gist)
-      if (filteredPeptides.length > 0) {
-        updateStep(9, 'waiting', `Uploading ${filteredPeptides.length} peptides for VaxiJen...`);
-        try {
-          const storeRes = await fetch('/api/vaxijen-store', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              sequences: filteredPeptides,
-              target: 'Tumour',
-              threshold: 0.5,
-              batch_size: 5,
-              gene: gene,
-            }),
-          });
-          const storeData = await storeRes.json();
-          if (storeData.success && storeData.gist_url) {
-            const url = `https://neopeptide-8k6mkfhec6jh9mrnyjxtyr.streamlit.app/?input_gist=${storeData.gist_url}`;
-            setVaxijenLink(url);
-          } else {
-            throw new Error(storeData.error || 'Failed to create gist');
-          }
-        } catch (e: any) {
-          updateStep(9, 'error', `Failed to upload: ${e.message}`);
-        }
-        setFilteredPeptides(filteredPeptides);
-        updateStep(9, 'waiting', `${filteredPeptides.length} peptides ready — click link to run VaxiJen`);
-      }
-
-      // Step 12: ProtParam Physicochemical
-      if (filteredPeptides.length > 0) {
-        updateStep(12, 'running', `ProtParam on ${filteredPeptides.length} peptides...`);
-        const resPP = await fetch('/api/protparam', {
+      // Phase 1 complete — upload CSVs to gist and redirect to Streamlit Phase 2
+      updateStep(9, 'running', 'Uploading results for Phase 2...');
+      try {
+        const storeRes = await fetch('/api/phase1-complete', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            peptides: filteredPeptides,
-            columns: filterResult.mhcI.columns,
-            rows: filterResult.mhcI.rows,
+            mhcICsv: mhcICsv,
+            mhcIICsv: mhcIICsv,
+            gene: gene,
           }),
         });
-        const ppData = await resPP.json();
-        if (!resPP.ok || !ppData.success) {
-          throw new Error(ppData.error || 'ProtParam failed');
+        const storeData = await storeRes.json();
+        if (storeData.success && storeData.files) {
+          const params = new URLSearchParams();
+          params.set('gene', gene);
+          if (storeData.files['neoantigens_mhc_I.csv']) {
+            params.set('mhc1', storeData.files['neoantigens_mhc_I.csv']);
+          }
+          if (storeData.files['neoantigens_mhc_II.csv']) {
+            params.set('mhc2', storeData.files['neoantigens_mhc_II.csv']);
+          }
+          const url = `https://neopeptide-8k6mkfhec6jh9mrnyjxtyr.streamlit.app/?${params.toString()}`;
+          setVaxijenLink(url);
+          updateStep(9, 'completed', `Phase 1 complete — ${filteredPeptides.length} peptides ready for Phase 2`);
+          setFilteredPeptides(filteredPeptides);
+        } else {
+          throw new Error(storeData.error || 'Failed to create gist');
         }
-        updateStep(12, 'completed', `${ppData.stats.stable} stable / ${ppData.stats.unstable} unstable`);
-        setStepResult(12, {
-          columns: ppData.columns || [],
-          rows: ppData.rows || [],
-          csv: ppData.fullCsv || '',
-        });
+      } catch (e: any) {
+        updateStep(9, 'error', `Failed to upload: ${e.message}`);
       }
 
     } catch (err) {
@@ -470,8 +450,7 @@ function HomeInner() {
                 <StepRow step={6} name="MHC-II Prediction (IEDB)" state={steps[6]} data={stepData[6]} />
                 <StepRow step={7} name="B-cell Prediction (IEDB)" state={steps[7]} data={stepData[7]} />
                 <StepRow step={8} name="Neoantigen Filtering" state={steps[8]} data={stepData[8]} />
-                <StepRow step={9} name="VaxiJen Antigenicity" state={steps[9]} data={stepData[9]} vaxijenLink={vaxijenLink} />
-                <StepRow step={12} name="ProtParam Properties" state={steps[12]} data={stepData[12]} />
+                <StepRow step={9} name="Phase 1 → Phase 2 (Streamlit)" state={steps[9]} data={stepData[9]} vaxijenLink={vaxijenLink} />
               </div>
 
               {(neoantigensI > 0 || neoantigensII > 0) && (
