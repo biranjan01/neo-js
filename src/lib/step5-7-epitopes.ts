@@ -40,7 +40,7 @@ export interface IEDBResult {
 export async function iedbPost(
   payload: Record<string, unknown>,
   name: string,
-  timeout = 600
+  timeout = 1200
 ): Promise<IEDBResult> {
   console.log(`  Submitting ${name}...`);
 
@@ -50,7 +50,7 @@ export async function iedbPost(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(120000),
+      signal: AbortSignal.timeout(300000),
     });
 
     if (!submitR.ok) {
@@ -127,41 +127,52 @@ export async function step5MHCI(
   };
 
   for (const [label, seq] of [['canonical', canonical], ['mutated', mutated]] as const) {
-    console.log(`\n=== MHC-I NetMHCpan 4.1 — ${label.toUpperCase()} ===`);
+    console.log(`\n=== MHC-I NetMHCpan 4.1 — ${label.toUpperCase()} === (${seq.length} aa)`);
 
-    const fasta = `>${geneName}_${label}\n${seq}`;
-    const res = await iedbPost(
-      {
-        pipeline_title: `${geneName} MHC-I ${label}`,
-        run_stage_range: [1, 1],
-        stages: [
-          {
-            stage_number: 1,
-            tool_group: 'mhci',
-            input_sequence_text: fasta,
-            input_parameters: {
-              alleles: MHC_I_27,
-              peptide_length_range: [9, 9],
-              predictors: [
-                { type: 'binding', method: 'netmhcpan_el' },
-                {
-                  type: 'processing',
-                  method: 'basic_processing',
-                  mhc_binding_method: 'netmhcpan_ba',
-                  proteasome: 'immuno',
-                  tap_precursor: 1,
-                  tap_alpha: 0.2,
-                },
-                { type: 'immunogenicity', mask_choice: 'by_allele' },
-              ],
+    const chunks = chunkSequence(seq);
+    const chunkResults: IEDBResult[] = [];
+
+    for (let ci = 0; ci < chunks.length; ci++) {
+      const chunk = chunks[ci];
+      const chunkLabel = chunks.length > 1 ? `${label} chunk ${ci+1}/${chunks.length}` : label;
+      const fasta = `>${geneName}_${label}_chunk${ci}\n${chunk}`;
+      console.log(`  Chunk ${ci+1}/${chunks.length}: ${chunk.length} aa`);
+
+      const res = await iedbPost(
+        {
+          pipeline_title: `${geneName} MHC-I ${chunkLabel}`,
+          run_stage_range: [1, 1],
+          stages: [
+            {
+              stage_number: 1,
+              tool_group: 'mhci',
+              input_sequence_text: fasta,
+              input_parameters: {
+                alleles: MHC_I_27,
+                peptide_length_range: [9, 9],
+                predictors: [
+                  { type: 'binding', method: 'netmhcpan_el' },
+                  {
+                    type: 'processing',
+                    method: 'basic_processing',
+                    mhc_binding_method: 'netmhcpan_ba',
+                    proteasome: 'immuno',
+                    tap_precursor: 1,
+                    tap_alpha: 0.2,
+                  },
+                  { type: 'immunogenicity', mask_choice: 'by_allele' },
+                ],
+              },
             },
-          },
-        ],
-      },
-      `MHC-I ${label}`
-    );
+          ],
+        },
+        `MHC-I ${chunkLabel}`
+      );
 
-    results[label] = res;
+      chunkResults.push(res);
+    }
+
+    results[label] = chunks.length > 1 ? mergeIEDBResults(chunkResults) : chunkResults[0];
   }
 
   return results;
@@ -181,64 +192,79 @@ export async function step6MHCII(
   };
 
   for (const [label, seq] of [['canonical', canonical], ['mutated', mutated]] as const) {
-    console.log(`\n=== MHC-II NetMHCIIpan 4.1 — ${label.toUpperCase()} ===`);
+    console.log(`\n=== MHC-II NetMHCIIpan 4.1 — ${label.toUpperCase()} === (${seq.length} aa)`);
 
-    const fasta = `>${geneName}_${label}\n${seq}`;
+    const chunks = chunkSequence(seq);
+    const bindChunks: IEDBResult[] = [];
+    const procChunks: IEDBResult[] = [];
 
-    // Binding
-    const bindRes = await iedbPost(
-      {
-        pipeline_title: `${geneName} MHC-II Binding ${label}`,
-        run_stage_range: [1, 1],
-        stages: [
-          {
-            stage_number: 1,
-            tool_group: 'mhcii',
-            input_sequence_text: fasta,
-            input_parameters: {
-              alleles: MHC_II_27,
-              peptide_length_range: [15, 15],
-              predictors: [{ type: 'binding', method: 'netmhciipan_el' }],
+    for (let ci = 0; ci < chunks.length; ci++) {
+      const chunk = chunks[ci];
+      const chunkLabel = chunks.length > 1 ? `${label} chunk ${ci+1}/${chunks.length}` : label;
+      const fasta = `>${geneName}_${label}_chunk${ci}\n${chunk}`;
+      console.log(`  Chunk ${ci+1}/${chunks.length}: ${chunk.length} aa`);
+
+      // Binding
+      const bindRes = await iedbPost(
+        {
+          pipeline_title: `${geneName} MHC-II Binding ${chunkLabel}`,
+          run_stage_range: [1, 1],
+          stages: [
+            {
+              stage_number: 1,
+              tool_group: 'mhcii',
+              input_sequence_text: fasta,
+              input_parameters: {
+                alleles: MHC_II_27,
+                peptide_length_range: [15, 15],
+                predictors: [{ type: 'binding', method: 'netmhciipan_el' }],
+              },
             },
-          },
-        ],
-      },
-      `MHC-II Binding ${label}`
-    );
+          ],
+        },
+        `MHC-II Binding ${chunkLabel}`
+      );
 
-    // Processing
-    const procRes = await iedbPost(
-      {
-        pipeline_title: `${geneName} MHC-II Processing ${label}`,
-        run_stage_range: [1, 1],
-        stages: [
-          {
-            stage_number: 1,
-            tool_group: 'mhcii',
-            input_sequence_text: fasta,
-            input_parameters: {
-              alleles: MHC_II_27,
-              peptide_length_range: [15, 15],
-              predictors: [{ type: 'processing', method: 'mhciinp' }],
+      // Processing
+      const procRes = await iedbPost(
+        {
+          pipeline_title: `${geneName} MHC-II Processing ${chunkLabel}`,
+          run_stage_range: [1, 1],
+          stages: [
+            {
+              stage_number: 1,
+              tool_group: 'mhcii',
+              input_sequence_text: fasta,
+              input_parameters: {
+                alleles: MHC_II_27,
+                peptide_length_range: [15, 15],
+                predictors: [{ type: 'processing', method: 'mhciinp' }],
+              },
             },
-          },
-        ],
-      },
-      `MHC-II MHCII-NP ${label}`
-    );
+          ],
+        },
+        `MHC-II MHCII-NP ${chunkLabel}`
+      );
+
+      bindChunks.push(bindRes);
+      procChunks.push(procRes);
+    }
+
+    const mergedBind = chunks.length > 1 ? mergeIEDBResults(bindChunks) : bindChunks[0];
+    const mergedProc = chunks.length > 1 ? mergeIEDBResults(procChunks) : procChunks[0];
 
     // Merge binding + processing
-    if (bindRes.success && procRes.success) {
+    if (mergedBind.success && mergedProc.success) {
       const procMap = new Map<string, Record<string, string>>();
-      for (const row of procRes.rows) {
-        const key = `${row[procRes.columns.indexOf('peptide')]}_${row[procRes.columns.indexOf('allele')]}`;
+      for (const row of mergedProc.rows) {
+        const key = `${row[mergedProc.columns.indexOf('peptide')]}_${row[mergedProc.columns.indexOf('allele')]}`;
         const dict: Record<string, string> = {};
-        procRes.columns.forEach((c, i) => (dict[c] = row[i]));
+        mergedProc.columns.forEach((c, i) => (dict[c] = row[i]));
         procMap.set(key, dict);
       }
 
-      const mergedRows = bindRes.rows.map((row) => {
-        const key = `${row[bindRes.columns.indexOf('peptide')]}_${row[bindRes.columns.indexOf('allele')]}`;
+      const mergedRows = mergedBind.rows.map((row) => {
+        const key = `${row[mergedBind.columns.indexOf('peptide')]}_${row[mergedBind.columns.indexOf('allele')]}`;
         const proc = procMap.get(key) || {};
         return [
           ...row,
@@ -251,7 +277,7 @@ export async function step6MHCII(
 
       results[label] = {
         success: true,
-        columns: [...bindRes.columns, 'n_motif', 'c_motif', 'cleavage_probability_score', 'cleavage_probability_percentile_rank'],
+        columns: [...mergedBind.columns, 'n_motif', 'c_motif', 'cleavage_probability_score', 'cleavage_probability_percentile_rank'],
         rows: mergedRows,
       };
     }
@@ -274,37 +300,50 @@ export async function step7BCell(
   };
 
   for (const [label, seq] of [['canonical', canonical], ['mutated', mutated]] as const) {
-    console.log(`\n=== B-cell BepiPred 3.0 — ${label.toUpperCase()} ===`);
+    console.log(`\n=== B-cell BepiPred 3.0 — ${label.toUpperCase()} === (${seq.length} aa)`);
 
-    const fasta = `>${geneName}_${label}\n${seq}`;
-    const res = await iedbPost(
-      {
-        pipeline_title: `${geneName} B-cell ${label}`,
-        run_stage_range: [1, 1],
-        stages: [
-          {
-            stage_number: 1,
-            tool_group: 'bcell_sequence',
-            input_sequence_text: fasta,
-            input_parameters: {
-              predictors: [
-                {
-                  type: 'epitope',
-                  method: 'bepipred3',
-                  window_size: 9,
-                  scoring: 'majority_vote',
-                  include_seq_len_esm: true,
-                },
-              ],
+    const chunks = chunkSequence(seq);
+    const chunkResults: IEDBResult[] = [];
+
+    for (let ci = 0; ci < chunks.length; ci++) {
+      const chunk = chunks[ci];
+      const chunkLabel = chunks.length > 1 ? `${label} chunk ${ci+1}/${chunks.length}` : label;
+      const fasta = `>${geneName}_${label}_chunk${ci}\n${chunk}`;
+      console.log(`  Chunk ${ci+1}/${chunks.length}: ${chunk.length} aa`);
+
+      const res = await iedbPost(
+        {
+          pipeline_title: `${geneName} B-cell ${chunkLabel}`,
+          run_stage_range: [1, 1],
+          stages: [
+            {
+              stage_number: 1,
+              tool_group: 'bcell_sequence',
+              input_sequence_text: fasta,
+              input_parameters: {
+                predictors: [
+                  {
+                    type: 'epitope',
+                    method: 'bepipred3',
+                    window_size: 9,
+                    scoring: 'majority_vote',
+                    include_seq_len_esm: true,
+                  },
+                ],
+              },
             },
-          },
-        ],
-      },
-      `B-cell ${label}`
-    );
+          ],
+        },
+        `B-cell ${chunkLabel}`
+      );
 
-    if (res.success) {
-      results[label] = res;
+      if (res.success) {
+        chunkResults.push(res);
+      }
+    }
+
+    if (chunkResults.length > 0) {
+      results[label] = chunks.length > 1 ? mergeIEDBResults(chunkResults) : chunkResults[0];
     }
   }
 
@@ -319,4 +358,46 @@ export function iedbResultToCSV(result: IEDBResult): string {
   const header = result.columns.join(',');
   const rows = result.rows.map((r) => r.join(','));
   return [header, ...rows].join('\n');
+}
+
+/**
+ * Split a protein sequence into overlapping chunks for IEDB processing.
+ * Large sequences (>5000 aa) cause IEDB timeouts.
+ * Overlap ensures peptides at chunk boundaries aren't missed.
+ */
+export function chunkSequence(seq: string, chunkSize = 2000, overlap = 20): string[] {
+  if (seq.length <= chunkSize) return [seq];
+  const chunks: string[] = [];
+  for (let i = 0; i < seq.length; i += chunkSize - overlap) {
+    chunks.push(seq.slice(i, i + chunkSize));
+  }
+  return chunks;
+}
+
+/**
+ * Merge multiple IEDB results, deduplicating by peptide+allele key
+ */
+export function mergeIEDBResults(results: IEDBResult[]): IEDBResult {
+  const successful = results.filter(r => r.success);
+  if (successful.length === 0) return { success: false, columns: [], rows: [], error: 'All chunks failed' };
+
+  const columns = successful[0].columns;
+  const peptideIdx = columns.indexOf('peptide');
+  const alleleIdx = columns.indexOf('allele');
+  const seen = new Set<string>();
+  const mergedRows: string[][] = [];
+
+  for (const r of successful) {
+    for (const row of r.rows) {
+      const key = peptideIdx >= 0 && alleleIdx >= 0
+        ? `${row[peptideIdx]}_${row[alleleIdx]}`
+        : row.join('|');
+      if (!seen.has(key)) {
+        seen.add(key);
+        mergedRows.push(row);
+      }
+    }
+  }
+
+  return { success: true, columns, rows: mergedRows };
 }
