@@ -338,8 +338,10 @@ function HomeInner() {
           }
           const url = `https://neopeptide-8k6mkfhec6jh9mrnyjxtyr.streamlit.app/?${params.toString()}`;
           setVaxijenLink(url);
-          updateStep(9, 'completed', `Phase 1 complete — ${filteredPeptides.length} peptides ready for Phase 2`);
+          updateStep(9, 'completed', `Phase 1 complete — redirecting to Phase 2...`);
           setFilteredPeptides(filteredPeptides);
+          // Auto-redirect after 3 seconds
+          setTimeout(() => { window.location.href = url; }, 3000);
         } else {
           throw new Error(storeData.error || 'Failed to create gist');
         }
