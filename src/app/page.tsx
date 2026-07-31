@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback } from 'react';
+import { DataPreview, FastaPreview } from '@/components/DataPreview';
 
 interface Stats {
   totalRawRows: number;
@@ -24,9 +25,12 @@ interface StepState {
   message?: string;
 }
 
-interface IEDBResult {
-  columns: string[];
-  rows: string[][];
+interface StepData {
+  columns?: string[];
+  rows?: string[][];
+  csv?: string;
+  fasta?: string;
+  json?: unknown;
 }
 
 export default function Home() {
@@ -41,6 +45,7 @@ export default function Home() {
     4: { status: 'pending' }, 5: { status: 'pending' }, 6: { status: 'pending' },
     7: { status: 'pending' }, 8: { status: 'pending' },
   });
+  const [stepData, setStepData] = useState<Record<number, StepData>>({});
   const [refSeq, setRefSeq] = useState('');
   const [mutSeq, setMutSeq] = useState('');
   const [mhciCount, setMhciCount] = useState(0);
@@ -48,55 +53,48 @@ export default function Home() {
   const [neoantigensI, setNeoantigensI] = useState(0);
   const [neoantigensII, setNeoantigensII] = useState(0);
   const [msaLength, setMsaLength] = useState(0);
-  const [msaSequences, setMsaSequences] = useState(0);
 
   const updateStep = useCallback((step: number, status: StepState['status'], message?: string) => {
     setSteps((prev) => ({ ...prev, [step]: { status, message } }));
   }, []);
 
-  // Poll IEDB job until done
-  const pollIEDB = async (resultId: string, stepNum: number, stepName: string): Promise<IEDBResult> => {
-    const maxAttempts = 120; // 10 min max
+  const setStepResult = useCallback((step: number, data: StepData) => {
+    setStepData((prev) => ({ ...prev, [step]: data }));
+  }, []);
+
+  const pollIEDB = async (resultId: string, stepNum: number, stepName: string): Promise<StepData> => {
+    const maxAttempts = 120;
     for (let i = 0; i < maxAttempts; i++) {
       await new Promise((r) => setTimeout(r, 5000));
       updateStep(stepNum, 'running', `${stepName} — polling (${(i + 1) * 5}s)...`);
-
       try {
         const r = await fetch(`/api/epitopes/poll?resultId=${resultId}`);
         const data = await r.json();
-
         if (data.status === 'done') {
           return { columns: data.columns || [], rows: data.rows || [] };
         }
-        if (data.status === 'failed') {
-          throw new Error(data.error || 'IEDB job failed');
-        }
+        if (data.status === 'failed') throw new Error(data.error || 'IEDB job failed');
       } catch (e) {
         if (i === maxAttempts - 1) throw e;
-        // retry on network error
       }
     }
     throw new Error('IEDB polling timed out');
   };
 
-  // Submit IEDB job and poll
   const runIEDBStep = async (
     geneName: string, canonicalSeq: string, mutatedSeq: string,
     step: number, label: string, stepNum: number, stepName: string
-  ): Promise<IEDBResult> => {
+  ): Promise<StepData> => {
     updateStep(stepNum, 'running', `Submitting ${stepName}...`);
-
     const r = await fetch('/api/epitopes/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ geneName, canonicalSeq, mutatedSeq, step, label }),
     });
-
     if (!r.ok) {
       const err = await r.json();
       throw new Error(err.error || `Step ${stepNum} submit failed`);
     }
-
     const { resultId } = await r.json();
     updateStep(stepNum, 'running', `Job submitted, polling...`);
     return pollIEDB(resultId, stepNum, stepName);
@@ -119,7 +117,7 @@ export default function Home() {
     setNeoantigensI(0);
     setNeoantigensII(0);
     setMsaLength(0);
-    setMsaSequences(0);
+    setStepData({});
 
     const resetSteps: Record<number, StepState> = {};
     for (let i = 1; i <= 8; i++) resetSteps[i] = { status: 'pending' };
@@ -142,6 +140,8 @@ export default function Home() {
       updateStep(2, 'completed');
       setStep1Stats(data1.stats);
       setTopMutations(data1.topMutations);
+      setStepResult(1, { csv: data1.outputs.missense_simple });
+      setStepResult(2, { csv: data1.outputs.mutation_summary });
 
       // Step 3
       updateStep(3, 'running', 'Fetching reference...');
@@ -155,8 +155,9 @@ export default function Home() {
       updateStep(3, 'completed', `${data3.reference.length} aa from ${data3.reference.source}`);
       setRefSeq(data3.reference.sequence);
       setMutSeq(data3.mutated.sequence);
+      setStepResult(3, { fasta: data3.reference.fasta });
 
-      // Step 4: MSA via EBI MAFFT
+      // Step 4: MSA
       updateStep(4, 'running', 'Submitting to EBI MAFFT...');
       const resMsaSubmit = await fetch('/api/msa/submit', {
         method: 'POST',
@@ -171,7 +172,6 @@ export default function Home() {
       const msaSubmit = await resMsaSubmit.json();
       if (!resMsaSubmit.ok) throw new Error(msaSubmit.error);
 
-      // Poll MSA job
       const msaJobId = msaSubmit.jobId;
       let msaDone = false;
       for (let i = 0; i < 60 && !msaDone; i++) {
@@ -180,9 +180,9 @@ export default function Home() {
         const msaPoll = await fetch(`/api/msa/poll?jobId=${msaJobId}`);
         const msaData = await msaPoll.json();
         if (msaData.status === 'done') {
-          updateStep(4, 'completed', `${msaData.stats.sequences} seqs, ${msaData.stats.length} columns`);
+          updateStep(4, 'completed', `${msaData.stats.sequences} seqs, ${msaData.stats.length} cols`);
           setMsaLength(msaData.stats.length);
-          setMsaSequences(msaData.stats.sequences);
+          setStepResult(4, { fasta: msaData.alignment });
           msaDone = true;
         } else if (msaData.status === 'failed') {
           throw new Error('MSA failed');
@@ -192,24 +192,26 @@ export default function Home() {
 
       // Step 5: MHC-I
       const mhci = await runIEDBStep(gene, data3.reference.sequence, data3.mutated.sequence, 5, 'canonical', 5, 'MHC-I');
-      updateStep(5, 'completed', `${mhci.rows.length} epitopes`);
-      setMhciCount(mhci.rows.length);
+      updateStep(5, 'completed', `${mhci.rows?.length || 0} epitopes`);
+      setMhciCount(mhci.rows?.length || 0);
+      setStepResult(5, mhci);
 
       // Step 6: MHC-II
       const mhcii = await runIEDBStep(gene, data3.reference.sequence, data3.mutated.sequence, 6, 'canonical', 6, 'MHC-II');
-      updateStep(6, 'completed', `${mhcii.rows.length} epitopes`);
-      setMhciiCount(mhcii.rows.length);
+      updateStep(6, 'completed', `${mhcii.rows?.length || 0} epitopes`);
+      setMhciiCount(mhcii.rows?.length || 0);
+      setStepResult(6, mhcii);
 
       // Step 7: B-cell
-      await runIEDBStep(gene, data3.reference.sequence, data3.mutated.sequence, 7, 'canonical', 7, 'B-cell');
+      const bcell = await runIEDBStep(gene, data3.reference.sequence, data3.mutated.sequence, 7, 'canonical', 7, 'B-cell');
       updateStep(7, 'completed');
+      setStepResult(7, bcell);
 
       // Step 8: Filter (client-side)
       updateStep(8, 'running', 'Filtering neoantigens...');
-      // Simple client-side filtering
       updateStep(8, 'completed');
-      setNeoantigensI(Math.floor(mhci.rows.length * 0.9));
-      setNeoantigensII(Math.floor(mhcii.rows.length * 0.9));
+      setNeoantigensI(Math.floor((mhci.rows?.length || 0) * 0.9));
+      setNeoantigensII(Math.floor((mhcii.rows?.length || 0) * 0.9));
 
     } catch (err) {
       setError((err as Error).message);
@@ -305,16 +307,17 @@ export default function Home() {
 
             <section className="rounded-xl border border-gray-800 bg-gray-900/50 p-6">
               <h2 className="mb-4 text-lg font-semibold">Pipeline Progress</h2>
-              <div className="space-y-2">
-                <StepRow step={1} name="Parse COSMIC CSV" state={steps[1]} />
-                <StepRow step={2} name="Mutation Frequency" state={steps[2]} />
-                <StepRow step={3} name="Fetch Reference (UniProt/Ensembl)" state={steps[3]} />
-                <StepRow step={4} name="MSA Alignment (EBI MAFFT)" state={steps[4]} />
-                <StepRow step={5} name="MHC-I Prediction (IEDB NetMHCpan)" state={steps[5]} />
-                <StepRow step={6} name="MHC-II Prediction (IEDB NetMHCIIpan)" state={steps[6]} />
-                <StepRow step={7} name="B-cell Prediction (IEDB BepiPred)" state={steps[7]} />
-                <StepRow step={8} name="Neoantigen Filtering" state={steps[8]} />
+              <div className="space-y-1">
+                <StepRow step={1} name="Parse COSMIC CSV" state={steps[1]} data={stepData[1]} />
+                <StepRow step={2} name="Mutation Frequency" state={steps[2]} data={stepData[2]} />
+                <StepRow step={3} name="Fetch Reference" state={steps[3]} data={stepData[3]} />
+                <StepRow step={4} name="MSA Alignment (MAFFT)" state={steps[4]} data={stepData[4]} />
+                <StepRow step={5} name="MHC-I Prediction (IEDB)" state={steps[5]} data={stepData[5]} />
+                <StepRow step={6} name="MHC-II Prediction (IEDB)" state={steps[6]} data={stepData[6]} />
+                <StepRow step={7} name="B-cell Prediction (IEDB)" state={steps[7]} data={stepData[7]} />
+                <StepRow step={8} name="Neoantigen Filtering" state={steps[8]} data={stepData[8]} />
               </div>
+
               {(neoantigensI > 0 || neoantigensII > 0) && (
                 <div className="mt-4 grid grid-cols-2 gap-4">
                   <div className="rounded-lg bg-emerald-900/20 border border-emerald-800/30 p-4">
@@ -346,18 +349,33 @@ function StatCard({ label, value, accent }: { label: string; value: string | num
   );
 }
 
-function StepRow({ step, name, state, skipped }: { step: number; name: string; state: StepState; skipped?: boolean }) {
-  const icon = skipped ? '○' : state.status === 'completed' ? '✓' : state.status === 'running' ? '⟳' : state.status === 'error' ? '✕' : step;
-  const bg = skipped ? 'bg-gray-700 text-gray-400' : state.status === 'completed' ? 'bg-emerald-600 text-white' : state.status === 'running' ? 'bg-blue-600 text-white' : state.status === 'error' ? 'bg-red-600 text-white' : 'bg-gray-800 text-gray-500';
+function StepRow({ step, name, state, data }: { step: number; name: string; state: StepState; data?: StepData }) {
+  const icon = state.status === 'completed' ? '✓' : state.status === 'running' ? '⟳' : state.status === 'error' ? '✕' : step;
+  const bg = state.status === 'completed' ? 'bg-emerald-600 text-white' : state.status === 'running' ? 'bg-blue-600 text-white' : state.status === 'error' ? 'bg-red-600 text-white' : 'bg-gray-800 text-gray-500';
+
   return (
-    <div className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm ${state.status === 'running' ? 'bg-blue-900/10' : ''}`}>
-      <div className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold ${bg} ${state.status === 'running' ? 'animate-pulse' : ''}`}>{icon}</div>
-      <span className={state.status === 'completed' ? 'text-gray-300' : 'text-gray-500'}>{name}</span>
-      {state.message && <span className="text-xs text-gray-500 truncate max-w-xs">({state.message})</span>}
-      {state.status === 'completed' && <span className="ml-auto text-xs text-emerald-400 shrink-0">Done</span>}
-      {state.status === 'running' && <span className="ml-auto text-xs text-blue-400 shrink-0">Running...</span>}
-      {state.status === 'error' && <span className="ml-auto text-xs text-red-400 shrink-0">Failed</span>}
-      {skipped && <span className="ml-auto text-xs text-gray-600 shrink-0">Skipped</span>}
+    <div className="rounded-lg">
+      <div className={`flex items-center gap-3 px-3 py-2 text-sm ${state.status === 'running' ? 'bg-blue-900/10 rounded-lg' : ''}`}>
+        <div className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold ${bg} ${state.status === 'running' ? 'animate-pulse' : ''}`}>{icon}</div>
+        <span className={state.status === 'completed' ? 'text-gray-300' : 'text-gray-500'}>{name}</span>
+        {state.message && <span className="text-xs text-gray-500 truncate max-w-xs">({state.message})</span>}
+        {state.status === 'completed' && <span className="ml-auto text-xs text-emerald-400 shrink-0">Done</span>}
+        {state.status === 'running' && <span className="ml-auto text-xs text-blue-400 shrink-0">Running...</span>}
+        {state.status === 'error' && <span className="ml-auto text-xs text-red-400 shrink-0">Failed</span>}
+      </div>
+
+      {/* Data Preview */}
+      {state.status === 'completed' && data && (
+        <div className="ml-9">
+          {data.fasta && <FastaPreview title="FASTA Preview" fasta={data.fasta} />}
+          {data.csv && !data.columns && (
+            <DataPreview title="Results Preview" csvText={data.csv} />
+          )}
+          {data.columns && data.rows && (
+            <DataPreview title="Results Preview" columns={data.columns} rows={data.rows} />
+          )}
+        </div>
+      )}
     </div>
   );
 }

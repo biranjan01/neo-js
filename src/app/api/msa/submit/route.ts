@@ -1,5 +1,5 @@
 // API Route: POST /api/msa/submit
-// Step 4: Submit sequences to EBI MAFFT (fast, <10s)
+// Step 4: Submit sequences to EBI MAFFT
 
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -13,7 +13,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'sequences array required' }, { status: 400 });
     }
 
-    // Build FASTA input
     const fasta = sequences.map((s: { header: string; sequence: string }) => `>${s.header}\n${s.sequence}`).join('\n');
 
     console.log(`Submitting ${sequences.length} sequences to EBI MAFFT...`);
@@ -22,7 +21,7 @@ export async function POST(request: NextRequest) {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
-        email: 'pipeline@neopeptide.app',
+        email: 'test@example.com',
         format: 'fasta',
         sequence: fasta,
         type: 'pro',
@@ -31,11 +30,15 @@ export async function POST(request: NextRequest) {
       signal: AbortSignal.timeout(60000),
     });
 
-    if (!r.ok) {
-      return NextResponse.json({ error: `MAFFT submit failed: ${r.status}` }, { status: 502 });
+    const text = await r.text();
+
+    // EBI returns XML error if email is invalid
+    if (text.includes('<?xml') || text.includes('<error>')) {
+      console.error('MAFFT error:', text);
+      return NextResponse.json({ error: 'MAFFT submission failed' }, { status: 502 });
     }
 
-    const jobId = (await r.text()).trim();
+    const jobId = text.trim();
     console.log(`MAFFT job submitted: ${jobId}`);
 
     return NextResponse.json({ jobId });
