@@ -46,11 +46,11 @@ export default async function handler(req: Request) {
     }
 
     // Parse results
-    const regex = /Overall Prediction.*?=\s*<b>\s*([\d.]+)\s*<\/b>.*?(ANTIGEN|NON-ANTIGEN)/gs;
-    const results = [];
+    const regex = /Overall Prediction.*?=\s*<b>\s*([\d.]+)\s*<\/b>.*?(ANTIGEN|NON-ANTIGEN)/g;
+    const results: { peptide: string; vaxijen_score: number; vaxijen_prediction: string }[] = [];
     let match;
     while ((match = regex.exec(html)) !== null) {
-      const idx = results.length;
+      const idx: number = results.length;
       if (idx < sequences.length) {
         results.push({
           peptide: sequences[idx],
