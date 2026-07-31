@@ -1,6 +1,6 @@
 // API Route: POST /api/vaxijen
 // Step 9: VaxiJen Antigenicity Prediction
-// Uses FlareSolverr (open source) to bypass Cloudflare
+// Uses Stagehand (open source) + Browserbase (free tier)
 // Citation: Doyon et al., BMC Bioinformatics 9:4 (2008)
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -18,21 +18,21 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    console.log(`--- Step 9: VaxiJen (FlareSolverr) ---`);
+    console.log(`--- Step 9: VaxiJen (Stagehand + Browserbase) ---`);
     console.log(`  Peptides: ${peptides.length}`);
 
-    const flaresolverrUrl = process.env.FLARESOLVERR_URL;
-    if (!flaresolverrUrl) {
+    const apiKey = process.env.BROWSERBASE_API_KEY;
+    if (!apiKey) {
       return NextResponse.json(
         {
           success: false,
-          error: 'FLARESOLVERR_URL not configured. Deploy FlareSolverr (open source) and set in .env.local. See browser-service/README.md',
+          error: 'BROWSERBASE_API_KEY not configured. Sign up at https://www.browserbase.com (free tier) and add to .env.local',
         },
         { status: 500 }
       );
     }
 
-    const vaxResult = await runVaxijen(peptides, flaresolverrUrl);
+    const vaxResult = await runVaxijen(peptides, apiKey);
 
     if (!vaxResult.success) {
       return NextResponse.json({

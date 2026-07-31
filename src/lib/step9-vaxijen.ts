@@ -1,6 +1,8 @@
 // Step 9: VaxiJen Antigenicity Prediction
-// Uses FlareSolverr (open source) to bypass Cloudflare and submit to VaxiJen
+// Uses Stagehand (open source, MIT) + Browserbase (free tier) for Cloudflare bypass
 // Citation: Doyon et al., BMC Bioinformatics 9:4 (2008)
+
+import { Stagehand } from '@browserbasehq/stagehand';
 
 export interface VaxijenResult {
   success: boolean;
@@ -19,8 +21,8 @@ export interface VaxijenPeptide {
   prediction: string; // 'Antigen' | 'Non-antigen'
 }
 
-const VAXIJEN_URL = 'https://www.ddg-pharmfac.net/vaxijen/VaxiJen/VaxiJen.cgi';
-const TARGET = 'Tumour';
+const VAXIJEN_URL = 'https://www.ddg-pharmfac.net/vaxijen/VaxiJen/VaxiJen.html';
+const TARGET = 'tumour';
 const THRESHOLD = '0.5';
 
 function createFasta(peptides: string[]): string {
@@ -28,168 +30,101 @@ function createFasta(peptides: string[]): string {
 }
 
 /**
- * Submit a batch of peptides to VaxiJen via FlareSolverr
- * FlareSolverr handles Cloudflare bypass using undetected-chromedriver
+ * Submit peptides to VaxiJen using Stagehand AI browser automation
  */
-async function submitBatchViaFlareSolverr(
+async function submitBatchViaStagehand(
   peptides: string[],
-  flaresolverrUrl: string,
-  sessionId?: string
+  browserbaseApiKey: string
 ): Promise<Map<string, VaxijenPeptide>> {
   const results = new Map<string, VaxijenPeptide>();
   const fasta = createFasta(peptides);
 
-  // Build form data as URL-encoded string
-  const formData = new URLSearchParams();
-  formData.append('sequence', fasta);
-  formData.append('Target', TARGET);
-  formData.append('threshold', THRESHOLD);
-  formData.append('SequenceOnOff', 'on');
-  formData.append('SummaryMode', 'off');
-  formData.append('Verbose', 'off');
-
-  const payload: Record<string, unknown> = {
-    cmd: 'request.post',
-    url: VAXIJEN_URL,
-    postData: formData.toString(),
-    maxTimeout: 120000,
-  };
-
-  if (sessionId) {
-    payload.session = sessionId;
-  }
-
-  const response = await fetch(`${flaresolverrUrl}/v1`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
+  const stagehand = new Stagehand({
+    env: 'BROWSERBASE',
+    apiKey: browserbaseApiKey,
   });
 
-  if (!response.ok) {
-    throw new Error(`FlareSolverr returned ${response.status}`);
-  }
+  await stagehand.init();
+  const page = stagehand.context.pages()[0];
 
-  const data = await response.json();
+  try {
+    // Navigate to VaxiJen
+    await page.goto(VAXIJEN_URL);
 
-  if (data.status !== 'ok') {
-    throw new Error(`FlareSolverr error: ${data.message}`);
-  }
+    // Fill the form using natural language act
+    await stagehand.act(`Type the following protein sequence into the textarea: ${fasta}`);
 
-  const html = data.solution?.response || '';
+    await stagehand.act(`Select "Tumour" from the Target Organism dropdown`);
 
-  // Parse results
-  const regex = /Overall Prediction for the Protective Antigen\s*=\s*(-?[\d.]+)\s*\(([^)]+)\)/gi;
-  const matches = [...html.matchAll(regex)];
+    await stagehand.act(`Set the threshold value to ${THRESHOLD}`);
 
-  for (let i = 0; i < matches.length && i < peptides.length; i++) {
-    const score = parseFloat(matches[i][1]);
-    const predRaw = matches[i][2];
-    const prediction = predRaw.toUpperCase().includes('NON') ? 'Non-antigen' : 'Antigen';
-    results.set(peptides[i], {
-      peptide: peptides[i],
-      score,
-      prediction,
-    });
+    await stagehand.act(`Make sure the Sequence Output checkbox is checked`);
+
+    // Submit the form
+    await stagehand.act(`Click the submit button`);
+
+    // Wait for results page
+    await page.waitForTimeout(10000);
+
+    // Extract results using structured extraction
+    const extractResult = await stagehand.extract(
+      'Extract all Overall Prediction for the Protective Antigen results. For each one, get the numeric score and the prediction (ANTIGEN or NON-ANTIGEN).',
+    );
+
+    // Parse results
+    const text = JSON.stringify(extractResult);
+    const regex = /Overall Prediction for the Protective Antigen\s*=\s*(-?[\d.]+)\s*\(([^)]+)\)/gi;
+    const matches = [...text.matchAll(regex)];
+
+    for (let i = 0; i < matches.length && i < peptides.length; i++) {
+      const score = parseFloat(matches[i][1]);
+      const predRaw = matches[i][2];
+      const prediction = predRaw.toUpperCase().includes('NON') ? 'Non-antigen' : 'Antigen';
+      results.set(peptides[i], {
+        peptide: peptides[i],
+        score,
+        prediction,
+      });
+    }
+  } finally {
+    await stagehand.close();
   }
 
   return results;
 }
 
 /**
- * Create a FlareSolverr session for reuse
- */
-async function createSession(
-  flaresolverrUrl: string,
-  sessionId: string
-): Promise<void> {
-  const response = await fetch(`${flaresolverrUrl}/v1`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      cmd: 'sessions.create',
-      session: sessionId,
-    }),
-  });
-
-  if (!response.ok) {
-    throw new Error(`Failed to create FlareSolverr session: ${response.status}`);
-  }
-}
-
-/**
- * Destroy a FlareSolverr session
- */
-async function destroySession(
-  flaresolverrUrl: string,
-  sessionId: string
-): Promise<void> {
-  try {
-    await fetch(`${flaresolverrUrl}/v1`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        cmd: 'sessions.destroy',
-        session: sessionId,
-      }),
-    });
-  } catch {
-    // Ignore cleanup errors
-  }
-}
-
-/**
- * Run VaxiJen on neoantigen peptides via FlareSolverr
+ * Run VaxiJen on neoantigen peptides
  */
 export async function runVaxijen(
   peptides: string[],
-  flaresolverrUrl: string,
-  batchSize: number = 50
+  browserbaseApiKey: string,
+  batchSize: number = 10
 ): Promise<VaxijenResult> {
   const allResults: VaxijenPeptide[] = [];
   const errors: string[] = [];
   const uniquePeptides = [...new Set(peptides)];
-
-  // Create a session for reuse
-  const sessionId = `vaxijen-${Date.now()}`;
-  try {
-    await createSession(flaresolverrUrl, sessionId);
-  } catch (err) {
-    // If session creation fails, proceed without sessions
-    console.warn('Could not create FlareSolverr session, using one-shot mode');
-  }
 
   const batches: string[][] = [];
   for (let i = 0; i < uniquePeptides.length; i += batchSize) {
     batches.push(uniquePeptides.slice(i, i + batchSize));
   }
 
-  try {
-    for (let b = 0; b < batches.length; b++) {
-      const batch = batches[b];
-      try {
-        const batchResults = await submitBatchViaFlareSolverr(
-          batch,
-          flaresolverrUrl,
-          sessionId
-        );
-        for (const pep of batch) {
-          const result = batchResults.get(pep);
-          if (result) {
-            allResults.push(result);
-          }
+  for (let b = 0; b < batches.length; b++) {
+    const batch = batches[b];
+    try {
+      const batchResults = await submitBatchViaStagehand(batch, browserbaseApiKey);
+      for (const pep of batch) {
+        const result = batchResults.get(pep);
+        if (result) {
+          allResults.push(result);
         }
-        // Delay between batches
-        if (b < batches.length - 1) {
-          await new Promise(r => setTimeout(r, 2000));
-        }
-      } catch (err) {
-        errors.push(`Batch ${b + 1}: ${(err as Error).message}`);
       }
-    }
-  } finally {
-    // Cleanup session
-    if (sessionId) {
-      await destroySession(flaresolverrUrl, sessionId);
+      if (b < batches.length - 1) {
+        await new Promise(r => setTimeout(r, 3000));
+      }
+    } catch (err) {
+      errors.push(`Batch ${b + 1}: ${(err as Error).message}`);
     }
   }
 
