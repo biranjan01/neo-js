@@ -11,6 +11,8 @@ import time
 import json
 import base64
 import traceback
+import subprocess
+import os
 
 st.set_page_config(page_title="VaxiJen Predictor", page_icon="🧬", layout="wide")
 
@@ -19,8 +21,32 @@ RESULT_PATTERN = r"Overall Prediction.*?=\s*<b>\s*([\d.]+)\s*</b>.*?(ANTIGEN|NON
 PIPELINE_URL = "https://neopeptide-rho.vercel.app"
 
 
+@st.cache_resource
+def ensure_camoufox():
+    """Ensure Camoufox browser is installed, download if needed"""
+    try:
+        from camoufox.pkgman import installed_verstr
+        installed_verstr()
+        return True
+    except Exception:
+        pass
+
+    with st.spinner("Downloading Camoufox browser (~300 MB, first run only)..."):
+        result = subprocess.run(
+            ["camoufox", "fetch"],
+            capture_output=True, text=True, timeout=600
+        )
+        if result.returncode != 0:
+            st.error(f"Failed to install Camoufox: {result.stderr}")
+            return False
+        return True
+
+
 def run_vaxijen(sequences, target, threshold, batch_size):
     """Core VaxiJen prediction using Camoufox"""
+    if not ensure_camoufox():
+        return None
+
     from camoufox.sync_api import Camoufox
 
     results = []
@@ -46,7 +72,6 @@ def run_vaxijen(sequences, target, threshold, batch_size):
             st.error("Cloudflare challenge did not pass in 40 seconds")
             return None
 
-        # Wait for form
         try:
             page.wait_for_selector("textarea[name='seq']", timeout=15000)
         except Exception:
@@ -63,19 +88,10 @@ def run_vaxijen(sequences, target, threshold, batch_size):
 
             fasta = "\n".join(f">seq{j+1}\n{s}" for j, s in enumerate(batch))
 
-            # Fill form
             page.fill("textarea[name='seq']", fasta)
-
-            # Select target - use value instead of label
             page.select_option("select[name='Target']", value=target.lower())
-
-            # Set threshold
             page.fill("input[name='threshold']", str(threshold))
-
-            # Submit
             page.click("input[name='submit']")
-
-            # Wait for response page
             page.wait_for_load_state("networkidle")
             time.sleep(5)
 
@@ -90,12 +106,10 @@ def run_vaxijen(sequences, target, threshold, batch_size):
                         "vaxijen_prediction": pred,
                     })
 
-            # Go back for next batch
             if batch_idx < num_batches - 1:
                 page.goto(VAXIJEN_URL, wait_until="commit")
                 for _ in range(10):
-                    title = page.title()
-                    if "moment" not in title.lower():
+                    if "moment" not in page.title().lower():
                         break
                     time.sleep(2)
                 try:
@@ -150,16 +164,10 @@ if "data" in params:
                 if antigens:
                     st.success(f"**{len(antigens)} probable antigen(s) found**")
 
-                # Build result JSON
                 result_json = json.dumps({
-                    "success": True,
-                    "step": 9,
+                    "success": True, "step": 9,
                     "citation": "Doyon et al., BMC Bioinformatics 9:4 (2008)",
-                    "stats": {
-                        "total": len(results),
-                        "antigens": len(antigens),
-                        "nonAntigens": len(results) - len(antigens),
-                    },
+                    "stats": {"total": len(results), "antigens": len(antigens), "nonAntigens": len(results) - len(antigens)},
                     "results": results,
                 })
                 encoded_result = base64.urlsafe_b64encode(result_json.encode()).decode()
@@ -229,7 +237,6 @@ if st.button("Run VaxiJen Prediction", type="primary"):
             if antigens:
                 st.success(f"**{len(antigens)} probable antigen(s) found**")
 
-            # Download buttons
             st.divider()
             csv_data = df.to_csv(index=False)
             st.download_button("Download CSV", csv_data, "vaxijen_results.csv", "text/csv")
