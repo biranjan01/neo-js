@@ -57,36 +57,17 @@ const TOOLS = [
   },
 ];
 
-const PIPELINE_STEPS = [
-  'Parse COSMIC',
-  'Mutation Frequency',
-  'Reference Seq',
-  'MSA',
-  'MHC-I',
-  'MHC-II',
-  'B-cell',
-  'Neoantigen Filter',
-  'Pre-filter',
-  'VaxiJen',
-  'AllerTOP',
-  'ToxinPred',
-  'ProtParam',
-  'Pop. Coverage',
-  'Export',
-];
-
 export default function LandingPage() {
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100">
-      {/* ── Ambient Background ── */}
+      {/* Ambient Background */}
       <div className="fixed inset-0 -z-10 overflow-hidden">
         <div className="absolute -top-40 -right-40 h-[500px] w-[500px] rounded-full bg-emerald-500/[0.04] blur-[120px]" />
         <div className="absolute -bottom-40 -left-40 h-[500px] w-[500px] rounded-full bg-cyan-500/[0.04] blur-[120px]" />
-        <div className="absolute top-1/3 left-1/2 h-[400px] w-[400px] -translate-x-1/2 rounded-full bg-violet-500/[0.02] blur-[100px]" />
       </div>
 
-      {/* ── Hero ── */}
-      <header className="relative flex min-h-screen flex-col items-center justify-center px-6">
+      {/* Header */}
+      <header className="relative flex min-h-[60vh] flex-col items-center justify-center px-6">
         <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.015)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.015)_1px,transparent_1px)] bg-[size:60px_60px]" />
 
         <div className="relative z-10 max-w-3xl text-center">
@@ -111,71 +92,38 @@ export default function LandingPage() {
             in cancer immunotherapy research.
           </p>
 
-          <p className="mx-auto mb-6 max-w-2xl text-sm leading-relaxed text-gray-500">
+          <p className="mx-auto mb-8 max-w-2xl text-sm leading-relaxed text-gray-500">
             Integrates somatic mutation analysis, MHC binding prediction (IC50-based),
             antigenicity screening, allergenicity &amp; toxicity assessment, immunogenicity scoring,
             physicochemical analysis, and HLA population coverage to identify
             high-confidence peptide vaccine candidates from COSMIC or cBioPortal mutation data.
           </p>
 
-          <div className="mx-auto mb-10 flex max-w-lg flex-wrap justify-center gap-3 text-[11px]">
-            <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-emerald-400">15-Step Pipeline</span>
-            <span className="rounded-full border border-blue-500/20 bg-blue-500/10 px-3 py-1 text-blue-400">Stop &amp; Resume</span>
-            <span className="rounded-full border border-violet-500/20 bg-violet-500/10 px-3 py-1 text-violet-400">500K+ Peptides</span>
-            <span className="rounded-full border border-amber-500/20 bg-amber-500/10 px-3 py-1 text-amber-400">cBioPortal Integration</span>
-          </div>
-
-          {/* CTA buttons */}
-          <div className="flex flex-col sm:flex-row items-center justify-center gap-4 mt-10">
-            <a href="#start" className="group inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-emerald-500 to-cyan-500 px-8 py-3.5 text-sm font-semibold text-white shadow-lg shadow-emerald-500/25 transition-all hover:shadow-emerald-500/40 hover:scale-105">
-              Start Analysis
-              <svg className="h-4 w-4 transition-transform group-hover:translate-x-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
-              </svg>
-            </a>
-            <a href="https://github.com/biranjan01/neopeptide" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-8 py-3.5 text-sm font-semibold text-gray-300 transition-all hover:border-white/20 hover:bg-white/[0.05]">
-              <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 24 24"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
-              View on GitHub
-            </a>
-          </div>
-
-          {/* Pipeline steps preview */}
-          <div className="mt-12 flex flex-wrap items-center justify-center gap-1.5 text-[11px] text-gray-600">
-            {PIPELINE_STEPS.map((step, i) => (
-              <span key={step} className="flex items-center gap-1.5">
-                <span className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-white/5 bg-white/[0.03] text-[9px] text-gray-700">{i + 1}</span>
-                {step}
-                {i < PIPELINE_STEPS.length - 1 && <span className="text-gray-700">→</span>}
-              </span>
-            ))}
-          </div>
-        </div>
-
-        <div className="absolute bottom-10 left-1/2 -translate-x-1/2 animate-bounce text-gray-600">
-          <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
-          </svg>
+          <a href="https://github.com/biranjan01/neopeptide" target="_blank" rel="noopener noreferrer"
+            className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-6 py-3 text-sm font-semibold text-gray-300 transition-all hover:border-white/20 hover:bg-white/[0.05]">
+            <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 24 24"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
+            View on GitHub
+          </a>
         </div>
       </header>
 
-      {/* ── Start Analysis ── */}
-      <section id="start" className="relative py-24 px-6 scroll-mt-20">
+      {/* Setup Guide */}
+      <section className="relative py-24 px-6">
         <div className="mx-auto max-w-4xl">
           <div className="mb-12 text-center">
-            <span className="mb-3 inline-block rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-[11px] font-medium text-emerald-400">GET STARTED</span>
-            <h2 className="text-3xl font-bold tracking-tight">Start Analysis</h2>
-            <p className="mt-3 text-sm text-gray-500">Follow these 3 steps to run the full 15-step neoantigen pipeline on your machine. No data leaves your computer.</p>
+            <h2 className="text-3xl font-bold tracking-tight">Setup &amp; Run</h2>
+            <p className="mt-3 text-sm text-gray-500">Runs entirely on your machine via Docker. No data leaves your computer.</p>
           </div>
 
           <div className="space-y-6">
 
-            {/* ── Step 1: Install Docker ── */}
+            {/* Step 1: Install Docker */}
             <div className="rounded-2xl border border-white/5 bg-white/[0.02] p-6">
               <div className="flex items-start gap-4">
                 <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-cyan-500 text-sm font-bold text-white">1</div>
                 <div className="flex-1">
                   <h3 className="text-base font-semibold text-gray-200">Install Docker</h3>
-                  <p className="mt-1 text-sm text-gray-500">Docker runs the pipeline in an isolated container. No Python, Node.js, or other dependencies needed on your machine.</p>
+                  <p className="mt-1 text-sm text-gray-500">Docker runs the pipeline in an isolated container. No Python, Node.js, or other dependencies needed.</p>
 
                   <div className="mt-4 space-y-3">
                     <div className="rounded-xl border border-blue-500/10 bg-blue-500/5 p-4">
@@ -226,7 +174,7 @@ export default function LandingPage() {
               </div>
             </div>
 
-            {/* ── Step 2: Download & Run ── */}
+            {/* Step 2: Clone & Run */}
             <div className="rounded-2xl border border-white/5 bg-white/[0.02] p-6">
               <div className="flex items-start gap-4">
                 <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-500 to-teal-500 text-sm font-bold text-white">2</div>
@@ -244,7 +192,7 @@ export default function LandingPage() {
                     <ol className="list-decimal list-inside space-y-1 text-xs text-gray-400">
                       <li>Click <a href="https://github.com/biranjan01/neopeptide/archive/refs/heads/main.zip" target="_blank" rel="noopener noreferrer" className="text-emerald-400 hover:underline font-medium">Download ZIP from GitHub</a></li>
                       <li>Extract the ZIP file to your Desktop (or anywhere)</li>
-                      <li>Open a terminal (see Step 1) and run:</li>
+                      <li>Open a terminal and run:</li>
                     </ol>
                     <div className="mt-3 rounded-lg bg-black/30 p-3 font-mono text-xs text-emerald-400">
                       <p>cd ~/Desktop/neopeptide-main</p>
@@ -273,7 +221,7 @@ export default function LandingPage() {
               </div>
             </div>
 
-            {/* ── Step 3: Use the Pipeline ── */}
+            {/* Step 3: Use the Pipeline */}
             <div className="rounded-2xl border border-white/5 bg-white/[0.02] p-6">
               <div className="flex items-start gap-4">
                 <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 to-purple-500 text-sm font-bold text-white">3</div>
@@ -350,7 +298,7 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* ── Disclaimer ── */}
+      {/* Disclaimer */}
       <section className="relative py-12 px-6">
         <div className="mx-auto max-w-4xl">
           <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-5">
@@ -373,7 +321,7 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* ── Tools & Citations ── */}
+      {/* Tools & Citations */}
       <section className="relative py-24 px-6">
         <div className="mx-auto max-w-5xl">
           <div className="mb-12 text-center">
@@ -408,53 +356,7 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* ── Pipeline Overview ── */}
-      <section className="relative py-24 px-6">
-        <div className="mx-auto max-w-4xl">
-          <div className="mb-12 text-center">
-            <span className="mb-3 inline-block rounded-full border border-blue-500/20 bg-blue-500/10 px-3 py-1 text-[11px] font-medium text-blue-400">PIPELINE</span>
-            <h2 className="text-3xl font-bold tracking-tight">How It Works</h2>
-          </div>
-
-          <div className="space-y-4">
-            {[
-              { phase: 'Data Preparation', num: 'Steps 1-4', steps: 'Parse COSMIC/cBioPortal mutations \u2192 Mutation frequency analysis \u2192 UniProt reference sequence retrieval \u2192 MAFFT multiple sequence alignment', color: 'violet' },
-              { phase: 'Epitope Prediction', num: 'Steps 5-8', steps: 'MHC-I binding (NetMHCpan 4.1 EL+BA) \u2192 MHC-II binding \u2192 B-cell epitopes (BepiPred 3.0) \u2192 Neoantigen filtering (IC50-based deduplication across HLA variants)', color: 'blue' },
-              { phase: 'Filtering & Properties', num: 'Steps 9-13', steps: 'Pre-filter by IC50 + immunogenicity \u2192 Antigenicity (VaxiJen) \u2192 Allergenicity (AllerTOP) \u2192 Toxicity (ToxinPred) \u2192 Physicochemical (ProtParam via ExPASy)', color: 'emerald' },
-              { phase: 'Analysis & Export', num: 'Steps 14-15', steps: 'HLA population coverage analysis \u2192 Consolidation into 3 final CSVs (MHC-I, MHC-II, B-cell) \u2192 Export with all intermediate files', color: 'amber' },
-            ].map((p, i) => (
-              <div key={i} className="flex gap-4 rounded-xl border border-white/5 bg-white/[0.02] p-5">
-                <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-${p.color}-500/10 text-${p.color}-400 text-sm font-bold`}>
-                  {i + 1}
-                </div>
-                <div>
-                  <h3 className="text-sm font-semibold text-gray-200">{p.phase} <span className="text-gray-600 font-normal">{p.num}</span></h3>
-                  <p className="mt-1 text-xs text-gray-500">{p.steps}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <div className="mt-12 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {[
-              { icon: '\uD83E\uDDEC', title: 'Chunked IEDB Processing', desc: 'Handles 500K+ peptides by auto-chunking sequences into 2000 aa segments with overlap, merging results across chunks' },
-              { icon: '\u23F8\uFE0F', title: 'Stop & Resume', desc: 'Stop the pipeline mid-run and resume from where you left off. State is saved to disk after each major step' },
-              { icon: '\uD83D\uDCCA', title: 'IC50-Based Filtering', desc: 'Deduplicates HLA variants by lowest IC50 binding affinity. Configurable immunogenicity and IC50 thresholds' },
-              { icon: '\uD83C\uDF0D', title: 'Population Coverage', desc: 'Calculates HLA allele frequency coverage across world populations for your candidate epitopes' },
-              { icon: '\uD83D\uDD2C', title: '3 Final CSVs', desc: 'Outputs separate MHC-I, MHC-II, and B-cell final CSVs with 72 columns of annotation per peptide' },
-              { icon: '\uD83E\uDDEE', title: 'cBioPortal Integration', desc: 'Query mutations directly from cBioPortal for 26 cancer types without needing COSMIC CSV upload' },
-            ].map((f, i) => (
-              <div key={i} className="rounded-xl border border-white/5 bg-white/[0.02] p-4">
-                <div className="text-lg mb-2">{f.icon}</div>
-                <h4 className="text-sm font-semibold text-gray-200">{f.title}</h4>
-                <p className="mt-1 text-[11px] text-gray-500">{f.desc}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* ── Footer ── */}
+      {/* Footer */}
       <footer className="border-t border-white/5 py-12 px-6">
         <div className="mx-auto max-w-4xl text-center">
           <div className="mb-4 inline-flex items-center gap-2 rounded-xl border border-white/5 bg-white/[0.02] px-5 py-3">

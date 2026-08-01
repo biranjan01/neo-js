@@ -12,18 +12,6 @@ const nextConfig: NextConfig = {
           { key: "Referrer-Policy", value: "origin-when-cross-origin" },
         ],
       },
-      {
-        source: "/sitemap.xml",
-        headers: [
-          { key: "Cache-Control", value: "public, max-age=86400, stale-while-revalidate=604800" },
-        ],
-      },
-      {
-        source: "/robots.txt",
-        headers: [
-          { key: "Cache-Control", value: "public, max-age=86400, stale-while-revalidate=604800" },
-        ],
-      },
     ];
   },
 };
