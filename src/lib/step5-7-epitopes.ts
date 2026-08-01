@@ -88,7 +88,7 @@ export async function iedbPost(
           const elapsed = Math.round((Date.now() - start) / 1000);
           console.log(`  Done (${elapsed}s)`);
 
-          // Extract peptide table
+          // Extract peptide table (MHC-I/II) or linear_epitope_table (B-cell)
           for (const t of pollData.data?.results || []) {
             if (t.type === 'peptide_table') {
               pollDelay = 10000;
@@ -100,7 +100,85 @@ export async function iedbPost(
             }
           }
 
-          return { success: false, columns: [], rows: [], error: 'No peptide table in results' };
+          // B-cell: extract epitope peptides from residue_table
+          // BepiPred returns per-residue scores with 'E' (epitope) or 'n' (non-epitope)
+          for (const t of pollData.data?.results || []) {
+            if (t.type === 'residue_table') {
+              pollDelay = 10000;
+              const cols = t.table_columns.map((c: { name: string }) => c.name);
+              const assignIdx = cols.findIndex((c: string) => c.includes('assignment'));
+              const residueIdx = cols.indexOf('residue');
+              const scoreIdx = cols.findIndex((c: string) => c.includes('bepipred_score') || c.includes('score'));
+              const posIdx = cols.indexOf('position');
+
+              if (assignIdx >= 0 && residueIdx >= 0) {
+                // Extract contiguous epitope regions (contiguous 'E' assignments)
+                const rows: string[][] = t.table_data;
+                const epitopes: string[][] = [];
+                let currentPep = '';
+                let startPos = '';
+                let scores: number[] = [];
+
+                for (const row of rows) {
+                  const assignment = row[assignIdx];
+                  const residue = row[residueIdx];
+                  const pos = posIdx >= 0 ? row[posIdx] : '';
+                  const sc = scoreIdx >= 0 ? parseFloat(row[scoreIdx]) : 0;
+
+                  if (assignment === 'E') {
+                    if (currentPep === '') startPos = pos;
+                    currentPep += residue;
+                    scores.push(sc);
+                  } else {
+                    if (currentPep.length >= 8) {
+                      const avgScore = scores.reduce((a, b) => a + b, 0) / scores.length;
+                      // columns: peptide, start, end, length, score, allele (empty for B-cell)
+                      epitopes.push([currentPep, String(startPos), String(pos), String(currentPep.length), String(avgScore.toFixed(4)), '']);
+                    }
+                    currentPep = '';
+                    scores = [];
+                  }
+                }
+                // Flush last epitope
+                if (currentPep.length >= 8) {
+                  const avgScore = scores.reduce((a, b) => a + b, 0) / scores.length;
+                  epitopes.push([currentPep, String(startPos), String(rows[rows.length - 1]?.[posIdx] || ''), String(currentPep.length), String(avgScore.toFixed(4)), '']);
+                }
+
+                const columns = ['peptide', 'start', 'end', 'length', 'bepipred_score', 'allele'];
+                console.log(`  B-cell: ${epitopes.length} epitope regions extracted from ${rows.length} residues`);
+                return { success: true, columns, rows: epitopes };
+              }
+
+              // Fallback: return raw residue table
+              console.log(`  B-cell residue_table: ${t.table_data.length} residues`);
+              return { success: true, columns: cols, rows: t.table_data };
+            }
+          }
+
+          // Also try linear_epitope_table as fallback
+          for (const t of pollData.data?.results || []) {
+            if (t.type === 'linear_epitope_table') {
+              pollDelay = 10000;
+              const cols = t.table_columns.map((c: { name: string }) => c.name);
+              const pepIdx = cols.indexOf('peptide');
+              if (pepIdx >= 0) {
+                const columns = ['peptide', 'start', 'end', 'length', 'bepipred_score', 'allele'];
+                const rows = t.table_data.map((r: string[]) => {
+                  const pep = r[pepIdx] || '';
+                  const startIdx = cols.indexOf('start');
+                  const endIdx = cols.indexOf('end');
+                  const lenIdx = cols.indexOf('length');
+                  const scoreIdx = cols.findIndex((c: string) => c.includes('score'));
+                  return [pep, r[startIdx] ?? '', r[endIdx] ?? '', r[lenIdx] ?? String(pep.length), r[scoreIdx] ?? '', ''];
+                });
+                console.log(`  B-cell linear_epitope_table: ${rows.length} epitopes`);
+                return { success: true, columns, rows };
+              }
+            }
+          }
+
+          return { success: false, columns: [], rows: [], error: 'No usable table in results' };
         }
 
         if (pollData.status === 'failed' || pollData.status === 'error') {

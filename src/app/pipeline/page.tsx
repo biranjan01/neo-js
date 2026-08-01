@@ -121,6 +121,7 @@ function PipelineInner() {
   const [mhciMutData, setMhciMutData] = useState<IEDBResult | null>(null);
   const [mhciiCanonData, setMhciiCanonData] = useState<IEDBResult | null>(null);
   const [mhciiMutData, setMhciiMutData] = useState<IEDBResult | null>(null);
+  const [filterResultRef, setFilterResultRef] = useState<Record<string, unknown> | null>(null);
 
   // Steps 9-14 results
   const [vaxijenResults, setVaxijenResults] = useState<{ sequence: string; score: number | null; prediction: string | null }[]>([]);
@@ -132,7 +133,7 @@ function PipelineInner() {
   const [finalCsvII, setFinalCsvII] = useState('');
   const [finalCsvBcell, setFinalCsvBcell] = useState('');
   const [popCoverageData, setPopCoverageData] = useState<any>(null);
-  const [immThreshold, setImmThreshold] = useState(0.5);
+  const [immThreshold, setImmThreshold] = useState(0);
   const [ic50Threshold, setIc50Threshold] = useState(500);
   const [bcellCount, setBcellCount] = useState(0);
 
@@ -150,6 +151,13 @@ function PipelineInner() {
 
   useEffect(() => { checkSavedState(); }, [checkSavedState]);
 
+  const handleDeleteState = useCallback(async (gene: string) => {
+    try {
+      await fetch(`/api/pipeline-state?gene=${encodeURIComponent(gene)}`, { method: 'DELETE' });
+      setSavedStates(prev => prev.filter(s => s.gene !== gene));
+    } catch { /* ignore */ }
+  }, []);
+
   const updateStep = useCallback((step: number, status: StepState['status'], message?: string) => {
     setSteps(prev => ({ ...prev, [step]: { status, message } }));
   }, []);
@@ -166,10 +174,22 @@ function PipelineInner() {
           serializableStepData[k] = { csv: v.csv, fasta: v.fasta, json: v.json, columns: v.columns, rows: v.rows?.slice(0, 5) };
         }
       }
+      // Save full IEDB data for resume (steps 5-8)
+      const fullIedb: Record<string, { columns: string[]; rows: string[][] }> = {};
+      if (extra.mhciCanon) fullIedb['mhciCanon'] = extra.mhciCanon as { columns: string[]; rows: string[][] };
+      if (extra.mhciMut) fullIedb['mhciMut'] = extra.mhciMut as { columns: string[]; rows: string[][] };
+      if (extra.mhciiCanon) fullIedb['mhciiCanon'] = extra.mhciiCanon as { columns: string[]; rows: string[][] };
+      if (extra.mhciiMut) fullIedb['mhciiMut'] = extra.mhciiMut as { columns: string[]; rows: string[][] };
+      if (extra.filterResult) fullIedb['filterResult'] = extra.filterResult as { columns: string[]; rows: string[][] };
+      // Remove fullIedb data from extra before sending (not JSON-serializable as extra)
+      const cleanExtra: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(extra)) {
+        if (!['mhciCanon', 'mhciMut', 'mhciiCanon', 'mhciiMut', 'filterResult'].includes(k)) cleanExtra[k] = v;
+      }
       await fetch('/api/pipeline-state', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ geneName: gene, lastCompletedStep: step, stepData: serializableStepData, ...extra }),
+        body: JSON.stringify({ geneName: gene, lastCompletedStep: step, stepData: serializableStepData, fullIedb, ...cleanExtra }),
       });
     } catch { /* ignore save errors */ }
   }, []);
@@ -197,6 +217,15 @@ function PipelineInner() {
       if (state.msaPng) setMsaPng(state.msaPng);
       if (state.steps) setSteps(state.steps);
       if (state.stepData) setStepData(state.stepData);
+      // Restore full IEDB data for resume
+      if (state.fullIedb) {
+        const fi = state.fullIedb;
+        if (fi.mhciCanon) setMhciCanonData(fi.mhciCanon);
+        if (fi.mhciMut) setMhciMutData(fi.mhciMut);
+        if (fi.mhciiCanon) setMhciiCanonData(fi.mhciiCanon);
+        if (fi.mhciiMut) setMhciiMutData(fi.mhciiMut);
+        if (fi.filterResult) setFilterResultRef(fi.filterResult);
+      }
       setResuming(true);
 
       setSteps(prev => {
@@ -252,40 +281,42 @@ function PipelineInner() {
 
   const handleRunPipeline = async () => {
     if (!geneName.trim()) { setError('Please enter a gene name'); return; }
-    if (!file && !cosmicCsv) { setError('Please select a CSV file or fetch from cBioPortal'); return; }
+    if (!resuming && !file && !cosmicCsv) { setError('Please select a CSV file or fetch from cBioPortal'); return; }
 
     setLoading(true);
     setError('');
-    setStep1Stats(null);
-    setTopMutations([]);
-    setRefSeq('');
-    setMutSeq('');
-    setMsaAlignment('');
-    setMsaPng('');
-    setMhciCount(0);
-    setMhciiCount(0);
-    setNeoantigensI(0);
-    setNeoantigensII(0);
-    setMsaLength(0);
-    setStepData({});
-    setMhciCanonData(null);
-    setMhciMutData(null);
-    setMhciiCanonData(null);
-    setMhciiMutData(null);
-    setVaxijenResults([]);
-    setAllertopResults([]);
-    setToxinpredResults([]);
-    setProtparamData(null);
-    setImmunogenicityRows([]);
-    setFinalCsvI('');
-    setFinalCsvII('');
-    setFinalCsvBcell('');
-    setPopCoverageData(null);
-    setBcellCount(0);
+    if (!resuming) {
+      setStep1Stats(null);
+      setTopMutations([]);
+      setRefSeq('');
+      setMutSeq('');
+      setMsaAlignment('');
+      setMsaPng('');
+      setMhciCount(0);
+      setMhciiCount(0);
+      setNeoantigensI(0);
+      setNeoantigensII(0);
+      setMsaLength(0);
+      setStepData({});
+      setMhciCanonData(null);
+      setMhciMutData(null);
+      setMhciiCanonData(null);
+      setMhciiMutData(null);
+      setVaxijenResults([]);
+      setAllertopResults([]);
+      setToxinpredResults([]);
+      setProtparamData(null);
+      setImmunogenicityRows([]);
+      setFinalCsvI('');
+      setFinalCsvII('');
+      setFinalCsvBcell('');
+      setPopCoverageData(null);
+      setBcellCount(0);
 
-    const resetSteps: Record<number, StepState> = {};
-    for (let i = 1; i <= 15; i++) resetSteps[i] = { status: 'pending' };
-    setSteps(resetSteps);
+      const resetSteps: Record<number, StepState> = {};
+      for (let i = 1; i <= 15; i++) resetSteps[i] = { status: 'pending' };
+      setSteps(resetSteps);
+    }
 
     const gene = geneName.trim().toUpperCase();
     const geneLower = gene.toLowerCase();
@@ -296,9 +327,17 @@ function PipelineInner() {
     let mhciiMut: IEDBResult = { success: false, columns: [], rows: [] };
     let filterResult: ReturnType<typeof step8FilterNeoantigens> | null = null;
 
+    // Determine resume start step
+    const pendingStep = resuming && steps ? Math.min(...Object.entries(steps).filter(([_, s]) => s.status === 'pending').map(([k]) => parseInt(k)).filter(n => !isNaN(n))) : 1;
+    const skipToStep = resuming ? pendingStep : 1;
+    if (resuming) console.log(`Resuming from step ${skipToStep}`);
+
     try {
-      // ─── Run steps 1-8 from file or cBioPortal CSV ───
-      let processRes: Response;
+      let data3: { reference: { sequence: string; source: string; fasta: string; length: number }; mutated: { sequence: string } };
+
+      if (skipToStep <= 4) {
+        // ─── Steps 1-4: Run from scratch ───
+        let processRes: Response;
       if (cosmicCsv) {
         // cBioPortal CSV mode: send CSV content directly
         updateStep(1, 'running');
@@ -336,8 +375,9 @@ function PipelineInner() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ geneName: gene, missenseCSV: data1.outputs.missense_simple }),
       });
-      const data3 = await res3.json();
-      if (!res3.ok) throw new Error(data3.error);
+      const res3Data = await res3.json();
+      if (!res3.ok) throw new Error(res3Data.error);
+      data3 = res3Data;
       updateStep(3, 'completed', `${data3.reference.length} aa from ${data3.reference.source}`);
       setRefSeq(data3.reference.sequence);
       setMutSeq(data3.mutated.sequence);
@@ -393,8 +433,26 @@ function PipelineInner() {
         mutSeq: data3.mutated.sequence,
         msaAlignment: msaResult.alignment,
       });
+      } else {
+        // Resume: reconstruct data3 from saved state
+        data3 = {
+          reference: { sequence: refSeq, source: 'saved', fasta: `>saved\n${refSeq}`, length: refSeq.length },
+          mutated: { sequence: mutSeq },
+        };
+        // Mark steps 1-4 as completed
+        for (let i = 1; i <= 4; i++) updateStep(i, 'completed', 'skipped (resume)');
+        // Restore full IEDB data from state
+        if (mhciCanonData) mhciCanon = mhciCanonData;
+        if (mhciMutData) mhciMut = mhciMutData;
+        if (mhciiCanonData) mhciiCanon = mhciiCanonData;
+        if (mhciiMutData) mhciiMut = mhciiMutData;
+        if (filterResultRef) filterResult = filterResultRef as unknown as ReturnType<typeof step8FilterNeoantigens>;
+      }
+
+      let bcellMutResult: IEDBResult = { success: false, columns: [], rows: [] };
 
       // ─── Step 5: MHC-I (chunked — handles large sequences) ───
+      if (skipToStep <= 5) {
       updateStep(5, 'running', 'MHC-I (chunked, may take a while for large sequences)...');
       const mhciChunked = await fetch('/api/epitopes/chunked', {
         method: 'POST',
@@ -410,9 +468,11 @@ function PipelineInner() {
       updateStep(5, 'completed', `${mhciMut.rows.length} mutated epitopes`);
       setMhciCount(mhciMut.rows.length);
       setStepResult(5, { columns: mhciMut.columns, rows: mhciMut.rows.slice(0, 5) });
-      await savePipelineState(gene, 5, stepData, { refSeq: data3.reference.sequence, mutSeq: data3.mutated.sequence });
+      await savePipelineState(gene, 5, stepData, { refSeq: data3.reference.sequence, mutSeq: data3.mutated.sequence, mhciCanon, mhciMut, mhciiCanon, mhciiMut });
+      } else { updateStep(5, 'completed', 'skipped (resume)'); }
 
       // ─── Step 6: MHC-II (chunked) ───
+      if (skipToStep <= 6) {
       updateStep(6, 'running', 'MHC-II (chunked, may take a while for large sequences)...');
       const mhciiChunked = await fetch('/api/epitopes/chunked', {
         method: 'POST',
@@ -428,8 +488,10 @@ function PipelineInner() {
       updateStep(6, 'completed', `${mhciiMut.rows.length} mutated epitopes`);
       setMhciiCount(mhciiMut.rows.length);
       setStepResult(6, { columns: mhciiMut.columns, rows: mhciiMut.rows.slice(0, 5) });
+      } else { updateStep(6, 'completed', 'skipped (resume)'); }
 
       // ─── Step 7: B-cell (chunked) ───
+      if (skipToStep <= 7) {
       updateStep(7, 'running', 'B-cell (chunked, may take a while for large sequences)...');
       const bcellChunked = await fetch('/api/epitopes/chunked', {
         method: 'POST',
@@ -439,17 +501,17 @@ function PipelineInner() {
       const bcellChunkedData = await bcellChunked.json();
       if (!bcellChunked.ok || bcellChunkedData.error) throw new Error(bcellChunkedData.error || 'B-cell chunked failed');
       const bcellCanonResult = { success: true, columns: bcellChunkedData.canonical.columns, rows: bcellChunkedData.canonical.rows } as IEDBResult;
-      const bcellMutResult = { success: true, columns: bcellChunkedData.mutated.columns, rows: bcellChunkedData.mutated.rows } as IEDBResult;
+      bcellMutResult = { success: true, columns: bcellChunkedData.mutated.columns, rows: bcellChunkedData.mutated.rows } as IEDBResult;
       updateStep(7, 'completed');
       setStepResult(7, { columns: bcellMutResult.columns, rows: bcellMutResult.rows.slice(0, 5) });
+      await savePipelineState(gene, 7, stepData, { refSeq: data3.reference.sequence, mutSeq: data3.mutated.sequence, mhciCanon, mhciMut, mhciiCanon, mhciiMut });
+      } else { updateStep(7, 'completed', 'skipped (resume)'); }
 
-      // Store for shared step 9-14 path
-      mhciCanon = { success: true, columns: mhciChunkedData.canonical.columns, rows: mhciChunkedData.canonical.rows };
-      mhciMut = { success: true, columns: mhciChunkedData.mutated.columns, rows: mhciChunkedData.mutated.rows };
-      mhciiCanon = { success: true, columns: mhciiChunkedData.canonical.columns, rows: mhciiChunkedData.canonical.rows };
-      mhciiMut = { success: true, columns: mhciiChunkedData.mutated.columns, rows: mhciiChunkedData.mutated.rows };
+      let bcellFiltered: string[] = [];
+      let bcellRowsFiltered: string[][] = [];
 
       // ─── Step 8: Neoantigen Filtering (3 sets: MHC-I, MHC-II, B-cell) ───
+      if (skipToStep <= 8) {
       updateStep(8, 'running', 'Filtering neoantigens...');
       filterResult = step8FilterNeoantigens(mhciCanon, mhciMut, mhciiCanon, mhciiMut);
       const mhcICsv = neoantigensToCSV(filterResult.mhcI.columns, filterResult.mhcI.rows);
@@ -458,8 +520,6 @@ function PipelineInner() {
       // Extract B-cell peptides (10-25 aa only)
       const bcellPepIdx = bcellMutResult.columns?.indexOf('peptide') ?? -1;
       const bcellSeqIdx = bcellMutResult.columns?.indexOf('sequence') ?? bcellPepIdx;
-      const bcellFiltered: string[] = [];
-      const bcellRowsFiltered: string[][] = [];
       if (bcellMutResult.rows && bcellMutResult.rows.length > 0) {
         const seenB = new Set<string>();
         for (const row of bcellMutResult.rows) {
@@ -480,6 +540,8 @@ function PipelineInner() {
       // Store full data for final merge
       setMhciMutData({ success: true, columns: filterResult.mhcI.columns, rows: filterResult.mhcI.rows });
       setMhciiMutData({ success: true, columns: filterResult.mhcII.columns, rows: filterResult.mhcII.rows });
+      } else { updateStep(8, 'completed', 'skipped (resume)'); }
+      if (!filterResult) throw new Error('No filter results available');
 
       // ─── Extract unique peptides from ALL 3 sets ───
       const pepIdx = filterResult.mhcI.columns.indexOf('peptide');
@@ -516,51 +578,76 @@ function PipelineInner() {
       const immColumns = ['peptide', 'allele', 'score', 'proteasome_score', 'tap_score', 'mhc_score', 'processing_score', 'total_score', 'immunogenicity_class'];
       const immRows: string[][] = [];
       const immMap = new Map<string, Record<string, unknown>>();
+      const ic50Map = new Map<string, number>();
 
+      // Helper to find a column by multiple possible names
+      const findCol = (cols: string[], ...names: string[]) => {
+        for (const n of names) { const i = cols.indexOf(n); if (i >= 0) return i; }
+        return -1;
+      };
+
+      // Build immunogenicity + IC50 maps from MHC-I
       if (filterResult && filterResult.mhcI.rows.length > 0) {
         const cols = filterResult.mhcI.columns;
-        const pepIdxI = cols.indexOf('peptide');
-        const alleleIdx = cols.indexOf('allele');
-        const scoreIdx = cols.indexOf('score');
-        const protoIdx = cols.indexOf('proteasome_score');
-        const tapIdx = cols.indexOf('tap_score');
-        const mhcIdx = cols.indexOf('mhc_score');
-        const procIdx = cols.indexOf('processing_score');
-        const totalIdx = cols.indexOf('total_score');
+        const pepIdxI = findCol(cols, 'peptide');
+        const alleleIdx = findCol(cols, 'allele');
+        const scoreIdx = findCol(cols, 'score', 'immunogenicity_score', 'imm_score');
+        const protoIdx = findCol(cols, 'proteasome_score');
+        const tapIdx = findCol(cols, 'tap_score');
+        const mhcIdx = findCol(cols, 'mhc_score');
+        const procIdx = findCol(cols, 'processing_score');
+        const totalIdx = findCol(cols, 'total_score');
+        const ic50ColIdx = findCol(cols, 'netmhcpan_ba_ic50', 'ic50', 'netmhcpan_ba');
+
+        console.log('MHC-I columns:', cols.join(', '));
+        console.log(`scoreIdx=${scoreIdx} ic50ColIdx=${ic50ColIdx} pepIdxI=${pepIdxI}`);
 
         for (const row of filterResult.mhcI.rows) {
           const pep = row[pepIdxI] ?? '';
           if (!pep) continue;
-          const scoreVal = scoreIdx >= 0 ? parseFloat(row[scoreIdx]) : 0;
-          let immClass = 'Low';
-          if (scoreVal >= immThreshold + 0.2) immClass = 'High';
-          else if (scoreVal >= immThreshold) immClass = 'Medium';
+          const scoreVal = scoreIdx >= 0 ? parseFloat(row[scoreIdx]) : NaN;
+          let immClass = 'Unknown';
+          if (!isNaN(scoreVal)) {
+            if (scoreVal >= immThreshold + 0.03) immClass = 'High';
+            else if (scoreVal >= immThreshold) immClass = 'Medium';
+            else immClass = 'Low';
+          }
           immRows.push([pep, row[alleleIdx] ?? '', row[scoreIdx] ?? '', row[protoIdx] ?? '', row[tapIdx] ?? '', row[mhcIdx] ?? '', row[procIdx] ?? '', row[totalIdx] ?? '', immClass]);
           if (!immMap.has(pep)) immMap.set(pep, { score: row[scoreIdx], class: immClass });
+          if (ic50ColIdx >= 0) {
+            const val = parseFloat(row[ic50ColIdx]);
+            if (!isNaN(val) && !ic50Map.has(pep)) ic50Map.set(pep, val);
+          }
         }
         immRows.sort((a, b) => (parseFloat(b[2]) || 0) - (parseFloat(a[2]) || 0));
       }
 
-      setImmunogenicityRows(immRows.map(r => { const obj: Record<string, string> = {}; immColumns.forEach((c, i) => obj[c] = r[i]); return obj; }));
-      setStepResult(9, { csv: immRows.length > 0 ? [immColumns.join(','), ...immRows.map(r => r.join(','))].join('\n') : '' });
-
-      // Build IC50 lookup from IEDB results
-      const ic50Idx = filterResult.mhcI.columns.indexOf('netmhcpan_ba_ic50');
-      const ic50Map = new Map<string, number>();
-      if (ic50Idx >= 0) {
-        for (const row of filterResult.mhcI.rows) {
-          const pep = row[pepIdx];
-          const val = parseFloat(row[ic50Idx]);
-          if (pep && !isNaN(val)) ic50Map.set(pep, val);
+      // Also extract IC50 from MHC-II (if available)
+      if (filterResult && filterResult.mhcII.rows.length > 0) {
+        const cols = filterResult.mhcII.columns;
+        const pepIdxII = findCol(cols, 'peptide');
+        const ic50ColIdx = findCol(cols, 'netmhcpan_ba_ic50', 'ic50', 'netmhcpan_ba');
+        if (ic50ColIdx >= 0) {
+          for (const row of filterResult.mhcII.rows) {
+            const pep = row[pepIdxII] ?? '';
+            const val = parseFloat(row[ic50ColIdx]);
+            if (pep && !isNaN(val) && !ic50Map.has(pep)) ic50Map.set(pep, val);
+          }
         }
       }
 
-      // Pre-filter: only keep peptides that are immunogenic AND strong binders
+      console.log(`immMap size: ${immMap.size}, ic50Map size: ${ic50Map.size}, peptides: ${peptides.length}`);
+
+      setImmunogenicityRows(immRows.map(r => { const obj: Record<string, string> = {}; immColumns.forEach((c, i) => obj[c] = r[i]); return obj; }));
+      setStepResult(9, { csv: immRows.length > 0 ? [immColumns.join(','), ...immRows.map(r => r.join(','))].join('\n') : '' });
+
+      // Pre-filter: immunogenicity score > 0 AND IC50 < threshold
       const preFilteredPeptides: string[] = [];
       for (const pep of peptides) {
         const imm = immMap.get(pep);
         const ic50 = ic50Map.get(pep);
-        const isImmunogenic = imm?.class === 'High' || imm?.class === 'Medium';
+        const scoreVal = imm?.score !== undefined ? parseFloat(String(imm.score)) : NaN;
+        const isImmunogenic = !isNaN(scoreVal) && scoreVal > 0;
         const isStrongBinder = ic50 !== undefined && ic50 < ic50Threshold;
         if (isImmunogenic && isStrongBinder) {
           preFilteredPeptides.push(pep);
@@ -568,7 +655,8 @@ function PipelineInner() {
       }
 
       const immHigh = immRows.filter(r => r[8] === 'High' || r[8] === 'Medium').length;
-      updateStep(9, 'completed', `${preFilteredPeptides.length} / ${peptides.length} passed pre-filter (Imm:${immHigh} IC50<${ic50Threshold}nM)`);
+      const immUnknown = immRows.filter(r => r[8] === 'Unknown').length;
+      updateStep(9, 'completed', `${preFilteredPeptides.length} / ${peptides.length} passed pre-filter (Imm:${immHigh} Unknown:${immUnknown} IC50<${ic50Threshold}nM)`);
 
       // ─── Step 10: VaxiJen (on pre-filtered peptides) ───
       updateStep(10, 'running', `Predicting antigenicity for ${preFilteredPeptides.length} peptides...`);
@@ -576,6 +664,7 @@ function PipelineInner() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sequences: preFilteredPeptides }),
+        signal: AbortSignal.timeout(600000),
       });
       const vaxData = await vaxRes.json();
       if (!vaxRes.ok) throw new Error(vaxData.detail || 'VaxiJen failed');
@@ -594,6 +683,7 @@ function PipelineInner() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sequences: preFilteredPeptides }),
+        signal: AbortSignal.timeout(900000),
       });
       const alData = await alRes.json();
       if (!alRes.ok) throw new Error(alData.detail || 'AllerTOP failed');
@@ -612,6 +702,7 @@ function PipelineInner() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sequences: preFilteredPeptides }),
+        signal: AbortSignal.timeout(600000),
       });
       const txData = await txRes.json();
       if (!txRes.ok) throw new Error(txData.detail || 'ToxinPred failed');
@@ -921,7 +1012,7 @@ function PipelineInner() {
             <div className="flex flex-col gap-2">
               <div className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-2">
                 <label className="text-[11px] text-gray-500 whitespace-nowrap">Immuno ≥</label>
-                <input type="number" step="0.05" min="0" max="1" value={immThreshold}
+                <input type="number" step="0.01" min="-0.1" max="0.1" value={immThreshold}
                   onChange={e => setImmThreshold(parseFloat(e.target.value) || 0.5)}
                   className="w-16 rounded-lg border border-white/10 bg-white/[0.05] px-2 py-1 text-center text-xs text-gray-200 focus:outline-none focus:border-emerald-500/50" />
                 <label className="text-[11px] text-gray-500 whitespace-nowrap ml-2">IC50 &lt;</label>
@@ -966,10 +1057,17 @@ function PipelineInner() {
             </div>
             <div className="mt-3 flex flex-wrap gap-2">
               {savedStates.map(s => (
-                <button key={s.gene} onClick={() => { setGeneName(s.gene); handleResume(s.gene); }}
-                  className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-300 hover:bg-amber-500/20 transition-all">
-                  {s.gene} — Step {s.lastStep}/15 — {new Date(s.savedAt).toLocaleDateString()}
-                </button>
+                <div key={s.gene} className="flex items-center gap-1 rounded-lg border border-amber-500/20 bg-amber-500/10">
+                  <button onClick={() => { setGeneName(s.gene); handleResume(s.gene); }}
+                    className="px-3 py-1.5 text-xs text-amber-300 hover:bg-amber-500/10 rounded-l-lg transition-all">
+                    {s.gene} — Step {s.lastStep}/15 — {new Date(s.savedAt).toLocaleDateString()}
+                  </button>
+                  <button onClick={() => handleDeleteState(s.gene)}
+                    className="px-2 py-1.5 text-xs text-red-400 hover:bg-red-500/20 rounded-r-lg border-l border-amber-500/20 transition-all"
+                    title="Delete saved state">
+                    <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                  </button>
+                </div>
               ))}
             </div>
           </section>

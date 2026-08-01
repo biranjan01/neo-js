@@ -141,11 +141,11 @@ async def vaxijen_predict(req: SeqRequest):
 
         # Step 1: Load form page, pass Cloudflare
         _log("  Loading form page + Cloudflare...")
-        await page.goto(VAXIJEN_FORM, wait_until="domcontentloaded", timeout=120000)
+        await page.goto(VAXIJEN_FORM, wait_until="domcontentloaded", timeout=180000)
 
         # Wait for Cloudflare challenge to resolve
         ta = None
-        for i in range(30):
+        for i in range(40):
             await asyncio.sleep(3)
             title = await page.title()
             if "just a moment" in title.lower():
@@ -173,8 +173,8 @@ async def vaxijen_predict(req: SeqRequest):
 
         for seq in req.sequences:
             # Navigate back to form each time
-            await page.goto(VAXIJEN_FORM, wait_until="domcontentloaded", timeout=60000)
-            for i in range(10):
+            await page.goto(VAXIJEN_FORM, wait_until="domcontentloaded", timeout=120000)
+            for i in range(15):
                 await asyncio.sleep(2)
                 ta = await page.query_selector("textarea")
                 if ta:
@@ -200,7 +200,7 @@ async def vaxijen_predict(req: SeqRequest):
             if submit:
                 await submit.click()
             try:
-                await page.wait_for_load_state("domcontentloaded", timeout=30000)
+                await page.wait_for_load_state("domcontentloaded", timeout=60000)
             except Exception:
                 pass
             await asyncio.sleep(3)
@@ -237,7 +237,7 @@ async def vaxijen_predict(req: SeqRequest):
                 if submit:
                     await submit.click()
                 try:
-                    await page.wait_for_load_state("domcontentloaded", timeout=30000)
+                    await page.wait_for_load_state("domcontentloaded", timeout=60000)
                 except Exception:
                     pass
                 await asyncio.sleep(3)
@@ -273,14 +273,14 @@ async def allertop_predict(req: SeqRequest):
 
             # Step 1: Load AllerTOP v2, pass Cloudflare
             _log("  Loading AllerTOP v2 + Cloudflare...")
-            await page.goto(ALLERTOP_URL, wait_until="commit", timeout=90000)
-            for _ in range(20):
+            await page.goto(ALLERTOP_URL, wait_until="commit", timeout=180000)
+            for _ in range(30):
                 await asyncio.sleep(3)
                 title = await page.title()
                 if "just a moment" not in title.lower():
                     break
             try:
-                await page.wait_for_load_state("networkidle", timeout=15000)
+                await page.wait_for_load_state("networkidle", timeout=30000)
             except Exception:
                 pass
             await asyncio.sleep(3)
@@ -294,7 +294,7 @@ async def allertop_predict(req: SeqRequest):
 
             _log(f"  Registering: {_uname}")
             try:
-                await page.goto("https://www.ddg-pharmfac.net/allertop_v2/accounts/signup/", wait_until="networkidle", timeout=30000)
+                await page.goto("https://www.ddg-pharmfac.net/allertop_v2/accounts/signup/", wait_until="networkidle", timeout=60000)
                 await asyncio.sleep(2)
                 for sel, val in [
                     ("#id_username", _uname),
@@ -309,7 +309,7 @@ async def allertop_predict(req: SeqRequest):
                 await asyncio.sleep(1)
                 await page.click("button[type='submit'], input[type='submit']")
                 try:
-                    await page.wait_for_load_state("networkidle", timeout=10000)
+                    await page.wait_for_load_state("networkidle", timeout=30000)
                 except Exception:
                     pass
                 await asyncio.sleep(3)
@@ -324,7 +324,7 @@ async def allertop_predict(req: SeqRequest):
             # Step 3: Login via page navigation
             _log(f"  Logging in...")
             try:
-                await page.goto("https://www.ddg-pharmfac.net/allertop_v2/accounts/login/?next=/allertop_v2/", wait_until="networkidle", timeout=30000)
+                await page.goto("https://www.ddg-pharmfac.net/allertop_v2/accounts/login/?next=/allertop_v2/", wait_until="networkidle", timeout=60000)
                 await asyncio.sleep(3)
                 for field_name, val in [("username", _uname), ("email", _email), ("password", _pw)]:
                     el = await page.query_selector(f"#id_{field_name}")
@@ -336,7 +336,7 @@ async def allertop_predict(req: SeqRequest):
                 await asyncio.sleep(1)
                 await page.click("button[type='submit'], input[type='submit']")
                 try:
-                    await page.wait_for_load_state("networkidle", timeout=10000)
+                    await page.wait_for_load_state("networkidle", timeout=30000)
                 except Exception:
                     pass
                 await asyncio.sleep(3)
@@ -345,7 +345,7 @@ async def allertop_predict(req: SeqRequest):
                 _log(f"  Login failed: {e}")
 
             # Step 4: Navigate to AllerTOP page (should be logged in now)
-            await page.goto(ALLERTOP_URL, wait_until="networkidle", timeout=30000)
+            await page.goto(ALLERTOP_URL, wait_until="networkidle", timeout=60000)
             await asyncio.sleep(2)
             _log(f"  Ready, URL: {page.url}")
 
@@ -380,13 +380,13 @@ async def allertop_predict(req: SeqRequest):
 
                     # Wait for results
                     try:
-                        await page.wait_for_load_state("domcontentloaded", timeout=60000)
+                        await page.wait_for_load_state("domcontentloaded", timeout=120000)
                     except Exception:
                         pass
-                    await asyncio.sleep(8)
+                    await asyncio.sleep(10)
 
                     # Wait for classification to appear
-                    for i in range(10):
+                    for i in range(15):
                         html = await page.content()
                         text = re.sub(r"<[^>]+>", " ", html)
                         if "Classification" in text and ("ALLERGEN" in text or "NON-ALLERGEN" in text):
@@ -426,14 +426,14 @@ async def allertop_predict(req: SeqRequest):
                         results.append(StepResult(sequence=seq, prediction="Unknown", similar_protein=similar_protein))
 
                     # Go back to form for next peptide
-                    await page.goto(ALLERTOP_URL, wait_until="networkidle", timeout=30000)
+                    await page.goto(ALLERTOP_URL, wait_until="networkidle", timeout=60000)
                     await asyncio.sleep(2)
 
                 except Exception as e:
                     _log(f"  {seq} → Error: {e}")
                     results.append(StepResult(sequence=seq, prediction="Unknown", error=str(e)))
                     try:
-                        await page.goto(ALLERTOP_URL, wait_until="networkidle", timeout=30000)
+                        await page.goto(ALLERTOP_URL, wait_until="networkidle", timeout=60000)
                         await asyncio.sleep(2)
                     except Exception:
                         pass
@@ -465,14 +465,14 @@ async def toxinpred_predict(req: SeqRequest):
         page = await browser.new_page()
 
         _log("  Loading ToxinPred + Cloudflare...")
-        await page.goto(TOXINPRED_URL, wait_until="commit", timeout=60000)
+        await page.goto(TOXINPRED_URL, wait_until="commit", timeout=120000)
         for _ in range(15):
             await asyncio.sleep(3)
             title = await page.title()
             if "just a moment" not in title.lower():
                 break
         try:
-            await page.wait_for_load_state("networkidle", timeout=15000)
+            await page.wait_for_load_state("networkidle", timeout=30000)
         except Exception:
             pass
         await asyncio.sleep(3)
