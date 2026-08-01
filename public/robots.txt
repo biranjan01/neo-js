@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /.pipeline-state/
+
+Sitemap: https://neopeptide.vercel.app/sitemap.xml
