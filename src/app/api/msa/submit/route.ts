@@ -2,6 +2,7 @@
 // Step 4: Submit sequences to EBI MAFFT
 
 import { NextRequest, NextResponse } from 'next/server';
+import { ipv4Fetch } from '@/lib/ipv4-fetch';
 
 const MAFFT_URL = 'https://www.ebi.ac.uk/Tools/services/rest/mafft';
 
@@ -17,24 +18,25 @@ export async function POST(request: NextRequest) {
 
     console.log(`Submitting ${sequences.length} sequences to EBI MAFFT...`);
 
-    const r = await fetch(`${MAFFT_URL}/run`, {
+    const body = new URLSearchParams({
+      email: 'test@example.com',
+      format: 'fasta',
+      sequence: fasta,
+      type: 'pro',
+      outfmt: 'fasta',
+    });
+
+    const r = await ipv4Fetch(`${MAFFT_URL}/run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        email: 'test@example.com',
-        format: 'fasta',
-        sequence: fasta,
-        type: 'pro',
-        outfmt: 'fasta',
-      }),
-      signal: AbortSignal.timeout(60000),
+      body: body.toString(),
+      timeout: 120000,
     });
 
     const text = await r.text();
-
     // EBI returns XML error if email is invalid
     if (text.includes('<?xml') || text.includes('<error>')) {
-      console.error('MAFFT error:', text);
+      console.error('MAFFT error:', text.substring(0, 300));
       return NextResponse.json({ error: 'MAFFT submission failed' }, { status: 502 });
     }
 

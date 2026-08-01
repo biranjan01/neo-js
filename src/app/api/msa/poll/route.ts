@@ -2,6 +2,7 @@
 // Poll MAFFT job status and get result
 
 import { NextRequest, NextResponse } from 'next/server';
+import { ipv4Fetch } from '@/lib/ipv4-fetch';
 
 const MAFFT_URL = 'https://www.ebi.ac.uk/Tools/services/rest/mafft';
 
@@ -15,8 +16,8 @@ export async function GET(request: NextRequest) {
     }
 
     // Check status
-    const statusR = await fetch(`${MAFFT_URL}/status/${jobId}`, {
-      signal: AbortSignal.timeout(15000),
+    const statusR = await ipv4Fetch(`${MAFFT_URL}/status/${jobId}`, {
+      timeout: 30000,
     });
 
     if (!statusR.ok) {
@@ -27,8 +28,8 @@ export async function GET(request: NextRequest) {
 
     if (status === 'FINISHED') {
       // Fetch alignment result
-      const resultR = await fetch(`${MAFFT_URL}/result/${jobId}/out`, {
-        signal: AbortSignal.timeout(30000),
+      const resultR = await ipv4Fetch(`${MAFFT_URL}/result/${jobId}/out`, {
+        timeout: 60000,
       });
 
       if (!resultR.ok) {
