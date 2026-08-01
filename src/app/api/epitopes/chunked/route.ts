@@ -6,7 +6,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { step5MHCI, step6MHCII, step7BCell } from '@/lib/step5-7-epitopes';
 
-export const maxDuration = 3600;
+export const maxDuration = 300;
 
 export async function POST(request: NextRequest) {
   try {
