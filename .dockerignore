@@ -1,0 +1,17 @@
+node_modules
+.next
+.git
+backend
+browser-service
+app.py
+*.md
+.env
+.env.local
+.pipeline-state
+.vercel
+coverage
+build
+out
+*.zip
+*.tar.gz
+.DS_Store

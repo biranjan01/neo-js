@@ -1,0 +1,15 @@
+# Vercel only needs the Next.js website
+# Ignore Docker and backend files
+
+Dockerfile
+docker-compose.yml
+.dockerignore
+docker.md
+backend/
+browser-service/
+app.py
+*.py
+*.pyc
+__pycache__/
+.pipeline-state/
+.vercel/
