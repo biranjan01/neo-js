@@ -25,9 +25,14 @@ export interface ProtparamPeptide {
   aliphaticIndex: number;
   gravy: number;
   aaCounts: Record<string, number>;
+  extinctionCoefficient?: number;
+  abs01?: number;
+  estimatedHalfLife?: string;
+  formula?: string;
+  totalAtoms?: number;
 }
 
-const PROTPARAM_URL = 'https://web.expasy.org/protparam/';
+const PROTPARAM_URL = 'https://web.expasy.org/cgi-bin/protparam/protparam';
 
 /**
  * Parse ProtParam HTML response into structured data
@@ -35,45 +40,48 @@ const PROTPARAM_URL = 'https://web.expasy.org/protparam/';
 function parseProtparamHTML(html: string): Partial<ProtparamPeptide> | null {
   const result: Partial<ProtparamPeptide> = {};
 
+  // Strip HTML tags for cleaner regex matching
+  const clean = html.replace(/<[^>]+>/g, ' ');
+
   // Number of amino acids
-  const numAAMatch = html.match(/Number of amino acids:\s*(\d+)/);
+  const numAAMatch = clean.match(/Number of amino acids:\s*(\d+)/);
   result.numAminoAcids = numAAMatch ? parseInt(numAAMatch[1]) : 0;
 
   // Theoretical pI
-  const piMatch = html.match(/Theoretical pI:\s*([\d.]+)/);
+  const piMatch = clean.match(/Theoretical pI:\s*([\d.]+)/);
   result.theoreticalPI = piMatch ? parseFloat(piMatch[1]) : 0;
 
   // Molecular weight
-  const mwMatch = html.match(/Molecular weight:\s*([\d.]+)/);
+  const mwMatch = clean.match(/Molecular weight:\s*([\d.]+)/);
   result.molecularWeight = mwMatch ? parseFloat(mwMatch[1]) : 0;
 
   // Negatively charged residues
-  const negMatch = html.match(/negatively charged residues.*?:\s*(\d+)/i);
+  const negMatch = clean.match(/negatively charged residues.*?:\s*(\d+)/i);
   result.negChargedResidues = negMatch ? parseInt(negMatch[1]) : 0;
 
   // Positively charged residues
-  const posMatch = html.match(/positively charged residues.*?:\s*(\d+)/i);
+  const posMatch = clean.match(/positively charged residues.*?:\s*(\d+)/i);
   result.posChargedResidues = posMatch ? parseInt(posMatch[1]) : 0;
 
   // Instability index
-  const instabMatch = html.match(/instability index.*?is computed to be\s*([\d.e\-]+)/i);
+  const instabMatch = clean.match(/instability index.*?is computed to be\s*([\d.e\-]+)/i);
   result.instabilityIndex = instabMatch ? parseFloat(instabMatch[1]) : 0;
 
   // Stability classification
-  if (html.includes('classifies the protein as stable')) {
+  if (clean.includes('classifies the protein as stable')) {
     result.stabilityClass = 'Stable';
-  } else if (html.includes('classifies the protein as unstable')) {
+  } else if (clean.includes('classifies the protein as unstable')) {
     result.stabilityClass = 'Unstable';
   } else {
     result.stabilityClass = 'Unknown';
   }
 
   // Aliphatic index
-  const aliphMatch = html.match(/Aliphatic index:\s*([\d.]+)/);
+  const aliphMatch = clean.match(/Aliphatic index:\s*([\d.]+)/);
   result.aliphaticIndex = aliphMatch ? parseFloat(aliphMatch[1]) : 0;
 
   // GRAVY
-  const gravyMatch = html.match(/Grand average of hydropathicity \(GRAVY\):\s*([-\d.]+)/);
+  const gravyMatch = clean.match(/Grand average of hydropathicity \(GRAVY\):\s*([-\d.]+)/);
   result.gravy = gravyMatch ? parseFloat(gravyMatch[1]) : 0;
 
   // AA composition
@@ -87,11 +95,31 @@ function parseProtparamHTML(html: string): Partial<ProtparamPeptide> | null {
   };
 
   let m;
-  while ((m = aaPattern.exec(html)) !== null) {
+  while ((m = aaPattern.exec(clean)) !== null) {
     const code = threeToOne[m[1]] || m[2];
     aaCounts[code] = parseInt(m[3]);
   }
   result.aaCounts = aaCounts;
+
+  // Extinction coefficient
+  const extMatch = clean.match(/Ext\.\s*coefficient\s+([\d]+)/);
+  result.extinctionCoefficient = extMatch ? parseInt(extMatch[1]) : undefined;
+
+  // Abs 0.1%
+  const absMatch = clean.match(/Abs\s+0\.1%.*?\s+([\d.]+)/);
+  result.abs01 = absMatch ? parseFloat(absMatch[1]) : undefined;
+
+  // Estimated half-life (mammalian reticulocytes)
+  const halfLifeMatch = clean.match(/The estimated half-life is:\s*([\d.]+\s*hours[^.]*)/i);
+  result.estimatedHalfLife = halfLifeMatch ? halfLifeMatch[1].trim() : undefined;
+
+  // Formula — spaces between elements: "C 45 H 70 N 8 O 11"
+  const formulaMatch = clean.match(/Formula:\s*([A-Z]\s*\d+(?:\s+[A-Z]\s*\d+)*)/);
+  result.formula = formulaMatch ? formulaMatch[1].replace(/\s+/g, '').trim() : undefined;
+
+  // Total atoms
+  const atomsMatch = clean.match(/Total number of atoms:\s*(\d+)/);
+  result.totalAtoms = atomsMatch ? parseInt(atomsMatch[1]) : undefined;
 
   if (result.numAminoAcids && result.numAminoAcids > 0) {
     return result;
@@ -107,6 +135,9 @@ async function submitPeptide(peptide: string): Promise<ProtparamPeptide | null> 
     const formData = new URLSearchParams();
     formData.append('sequence', peptide);
 
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+
     const response = await fetch(PROTPARAM_URL, {
       method: 'POST',
       headers: {
@@ -114,7 +145,9 @@ async function submitPeptide(peptide: string): Promise<ProtparamPeptide | null> 
       },
       body: formData.toString(),
       redirect: 'follow',
+      signal: controller.signal,
     });
+    clearTimeout(timeout);
 
     if (!response.ok) {
       return null;
@@ -136,6 +169,11 @@ async function submitPeptide(peptide: string): Promise<ProtparamPeptide | null> 
         aliphaticIndex: parsed.aliphaticIndex || 0,
         gravy: parsed.gravy || 0,
         aaCounts: parsed.aaCounts || {},
+        extinctionCoefficient: parsed.extinctionCoefficient,
+        abs01: parsed.abs01,
+        estimatedHalfLife: parsed.estimatedHalfLife,
+        formula: parsed.formula,
+        totalAtoms: parsed.totalAtoms,
       };
     }
   } catch {

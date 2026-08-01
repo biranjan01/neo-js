@@ -7,20 +7,34 @@ import { step2AnalyzeFrequency, missenseToCSV, frequencyToCSV } from '@/lib/step
 
 export async function POST(request: NextRequest) {
   try {
-    const formData = await request.formData();
-    const file = formData.get('file') as File | null;
-    const geneName = (formData.get('geneName') as string) || 'GENE';
+    let csvText: string;
+    let geneName: string;
 
-    if (!file) {
-      return NextResponse.json({ error: 'No file uploaded' }, { status: 400 });
+    const contentType = request.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      // JSON body: cBioPortal CSV content
+      const body = await request.json();
+      csvText = body.csvContent || '';
+      geneName = body.geneName || 'GENE';
+      if (!csvText) {
+        return NextResponse.json({ error: 'No CSV content provided' }, { status: 400 });
+      }
+    } else {
+      // FormData: file upload
+      const formData = await request.formData();
+      const file = formData.get('file') as File | null;
+      geneName = (formData.get('geneName') as string) || 'GENE';
+
+      if (!file) {
+        return NextResponse.json({ error: 'No file uploaded' }, { status: 400 });
+      }
+      if (!file.name.endsWith('.csv')) {
+        return NextResponse.json({ error: 'Please upload a CSV file' }, { status: 400 });
+      }
+      csvText = await file.text();
     }
 
-    if (!file.name.endsWith('.csv')) {
-      return NextResponse.json({ error: 'Please upload a CSV file' }, { status: 400 });
-    }
-
-    const csvText = await file.text();
-    console.log(`Processing ${file.name} (${csvText.length} bytes) for gene: ${geneName}`);
+    console.log(`Processing CSV (${csvText.length} bytes) for gene: ${geneName}`);
 
     // Step 1
     console.log('--- Step 1: Parsing mutations ---');

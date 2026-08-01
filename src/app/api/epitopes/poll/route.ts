@@ -2,6 +2,7 @@
 // Poll IEDB job status (fast, <5s)
 
 import { NextRequest, NextResponse } from 'next/server';
+import { ipv4Fetch } from '@/lib/ipv4-fetch';
 
 const IEDB_API_URL = 'https://api-nextgen-tools.iedb.org/api/v1';
 
@@ -14,8 +15,9 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'resultId required' }, { status: 400 });
     }
 
-    const r = await fetch(`${IEDB_API_URL}/results/${resultId}`, {
-      signal: AbortSignal.timeout(30000),
+    const r = await ipv4Fetch(`${IEDB_API_URL}/results/${resultId}`, {
+      signal: AbortSignal.timeout(60000),
+      timeout: 90000,
     });
 
     if (!r.ok) {

@@ -1,527 +1,309 @@
 'use client';
 
-import { useState, useCallback, useRef, useEffect, Suspense } from 'react';
-import { useSearchParams } from 'next/navigation';
-import { DataPreview, FastaPreview } from '@/components/DataPreview';
-import { step8FilterNeoantigens, neoantigensToCSV } from '@/lib/step8-filter-neoantigens';
-import { IEDBResult } from '@/lib/step5-7-epitopes';
+import { useRouter } from 'next/navigation';
 
-interface Stats {
-  totalRawRows: number;
-  totalMissense: number;
-  uniquePositions: number;
-  hotspotCount: number;
-  totalSamples: number;
-}
+const TOOLS = [
+  {
+    name: 'IEDB Next-Gen Tools',
+    desc: 'MHC-I / MHC-II binding prediction (NetMHCpan 4.1 EL+BA), processing (NetMHCcons), immunogenicity scoring, and B-cell epitope prediction (BepiPred 3.0)',
+    url: 'https://nextgen-tools.iedb.org/',
+    citation: 'Vita R, et al. Nucleic Acids Res. 2019;47(W1):W440-W445.',
+  },
+  {
+    name: 'IEDB Population Coverage',
+    desc: 'Standalone tool for calculating HLA population coverage across world populations for given epitope-allele combinations',
+    url: 'https://www.iedb.org/',
+    citation: 'Bui HH, et al. Immunogenetics. 2006;58(5-6):327-333.',
+  },
+  {
+    name: 'VaxiJen v2.0',
+    desc: 'Alignment-independent server for prediction of protective antigens and vaccine candidates using auto-cross covariance (ACC) transformation of protein sequences',
+    url: 'http://www.ddg-pharmfac.net/vaxijen/VaxiJen/',
+    citation: 'Doytchinova IA, Flower DR. BMC Bioinformatics. 2007;8:4.',
+  },
+  {
+    name: 'AllerTOP v2.1',
+    desc: 'Allergen prediction using amino acid motif-based auto-cross covariance (ACC) transformation and machine learning',
+    url: 'https://www.ddg-pharmfac.net/allertop_v2/',
+    citation: 'Dimitrov I, et al. Bioinformatics. 2014;30(4):589-590.',
+  },
+  {
+    name: 'ToxinPred v3',
+    desc: 'Prediction of toxicity and non-toxicity of peptide sequences using hybrid approach combining multiple physicochemical properties',
+    url: 'https://webs.iiitd.edu.in/raghava/toxinpred3/',
+    citation: 'Gupta S, et al. PLoS One. 2013;8(11):e80109.',
+  },
+  {
+    name: 'MAFFT',
+    desc: 'Multiple sequence alignment program with high throughput, accuracy, and speed for large-scale genomic analysis',
+    url: 'https://www.ebi.ac.uk/mafft/',
+    citation: 'Katoh K, Standley DM. Mol Biol Evol. 2013;30(4):772-780.',
+  },
+  {
+    name: 'ExPASy ProtParam',
+    desc: 'Computation of physicochemical parameters including molecular weight, theoretical pI, instability index, aliphatic index, and GRAVY',
+    url: 'https://web.expasy.org/protparam/',
+    citation: 'Gasteiger E, et al. in "The Proteomics Protocols Handbook", Humana Press, 2005.',
+  },
+  {
+    name: 'UniProt / Ensembl',
+    desc: 'Reference protein sequence retrieval for canonical wild-type isoform mapping',
+    url: 'https://www.uniprot.org/',
+    citation: 'The UniProt Consortium. Nucleic Acids Res. 2023;51(D1):D483-D492.',
+  },
+  {
+    name: 'COSMIC / cBioPortal',
+    desc: 'Catalogue of Somatic Mutations in Cancer and cBioPortal — sources of somatic mutation frequency data for neoantigen prioritization',
+    url: 'https://cancer.sanger.ac.uk/cosmic/',
+    citation: 'Forbes SA, et al. Nucleic Acids Res. 2020;48(D1):D517-D524.',
+  },
+];
 
-interface Mutation {
-  Position: number;
-  Ref_AA: string;
-  Alt_AA: string;
-  Patient_Count: number;
-  MAF: number;
-  is_hotspot: boolean;
-}
+const PIPELINE_STEPS = [
+  'Parse COSMIC',
+  'Mutation Frequency',
+  'Reference Seq',
+  'MSA',
+  'MHC-I',
+  'MHC-II',
+  'B-cell',
+  'Neoantigen Filter',
+  'Pre-filter',
+  'VaxiJen',
+  'AllerTOP',
+  'ToxinPred',
+  'ProtParam',
+  'Pop. Coverage',
+  'Export',
+];
 
-interface StepState {
-  status: 'pending' | 'running' | 'completed' | 'error' | 'waiting';
-  message?: string;
-}
-
-interface StepData {
-  columns?: string[];
-  rows?: string[][];
-  csv?: string;
-  fasta?: string;
-  json?: unknown;
-}
-
-export default function Home() {
-  return (
-    <Suspense fallback={<div className="min-h-screen flex items-center justify-center text-gray-400">Loading...</div>}>
-      <HomeInner />
-    </Suspense>
-  );
-}
-
-function HomeInner() {
-  const [file, setFile] = useState<File | null>(null);
-  const [geneName, setGeneName] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [step1Stats, setStep1Stats] = useState<Stats | null>(null);
-  const [topMutations, setTopMutations] = useState<Mutation[]>([]);
-  const [steps, setSteps] = useState<Record<number, StepState>>({
-    1: { status: 'pending' }, 2: { status: 'pending' }, 3: { status: 'pending' },
-    4: { status: 'pending' }, 5: { status: 'pending' }, 6: { status: 'pending' },
-    7: { status: 'pending' }, 8: { status: 'pending' },
-    9: { status: 'pending' },
-  });
-  const [stepData, setStepData] = useState<Record<number, StepData>>({});
-  const [refSeq, setRefSeq] = useState('');
-  const [mutSeq, setMutSeq] = useState('');
-  const [mhciCount, setMhciCount] = useState(0);
-  const [mhciiCount, setMhciiCount] = useState(0);
-  const [neoantigensI, setNeoantigensI] = useState(0);
-  const [neoantigensII, setNeoantigensII] = useState(0);
-  const [msaLength, setMsaLength] = useState(0);
-  const [vaxijenLink, setVaxijenLink] = useState('');
-  const [filteredPeptides, setFilteredPeptides] = useState<string[]>([]);
-  const searchParams = useSearchParams();
-
-  const updateStep = useCallback((step: number, status: StepState['status'], message?: string) => {
-    setSteps((prev) => ({ ...prev, [step]: { status, message } }));
-  }, []);
-
-  const setStepResult = useCallback((step: number, data: StepData) => {
-    setStepData((prev) => ({ ...prev, [step]: data }));
-  }, []);
-
-  // Handle VaxiJen results redirect back from Streamlit
-  useEffect(() => {
-    const vaxResult = searchParams.get('vaxijen_result');
-    if (vaxResult) {
-      try {
-        const decoded = JSON.parse(atob(vaxResult));
-        if (decoded.success && decoded.results) {
-          updateStep(9, 'completed', `${decoded.stats.antigens} antigens / ${decoded.stats.nonAntigens} non-antigens`);
-          const pepResults = decoded.results;
-          const columns = ['peptide', 'vaxijen_score', 'vaxijen_prediction'];
-          const rows = pepResults.map((r: { peptide: string; vaxijen_score: number; vaxijen_prediction: string }) => [
-            r.peptide, String(r.vaxijen_score), r.vaxijen_prediction,
-          ]);
-          const csv = [columns.join(','), ...rows.map((r: string[]) => r.join(','))].join('\n');
-          setStepResult(9, { columns, rows, csv });
-          window.history.replaceState({}, '', '/');
-        }
-      } catch (e) {
-        console.error('Failed to parse VaxiJen result:', e);
-      }
-    }
-
-    // Handle VaxiJen gist redirect from Streamlit
-    const vaxGist = searchParams.get('vaxijen_gist');
-    if (vaxGist) {
-      updateStep(9, 'running', 'Fetching VaxiJen results from gist...');
-      fetch(vaxGist)
-        .then((r) => r.json())
-        .then((decoded: any) => {
-          if (decoded.success && decoded.results) {
-            updateStep(9, 'completed', `${decoded.stats.antigens} antigens / ${decoded.stats.nonAntigens} non-antigens`);
-            const pepResults = decoded.results;
-            const columns = ['peptide', 'vaxijen_score', 'vaxijen_prediction'];
-            const rows = pepResults.map((r: { peptide: string; vaxijen_score: number; vaxijen_prediction: string }) => [
-              r.peptide, String(r.vaxijen_score), r.vaxijen_prediction,
-            ]);
-            const csv = [columns.join(','), ...rows.map((r: string[]) => r.join(','))].join('\n');
-            setStepResult(9, { columns, rows, csv });
-            window.history.replaceState({}, '', '/');
-          } else {
-            updateStep(9, 'error', 'Invalid gist data');
-          }
-        })
-        .catch((e) => {
-          console.error('Failed to fetch gist:', e);
-          updateStep(9, 'error', `Failed to fetch gist: ${e.message}`);
-        });
-    }
-  }, [searchParams, updateStep, setStepResult]);
-
-  const pollIEDB = async (resultId: string, stepNum: number, stepName: string): Promise<StepData> => {
-    const maxAttempts = 120;
-    for (let i = 0; i < maxAttempts; i++) {
-      await new Promise((r) => setTimeout(r, 5000));
-      updateStep(stepNum, 'running', `${stepName} — polling (${(i + 1) * 5}s)...`);
-      try {
-        const r = await fetch(`/api/epitopes/poll?resultId=${resultId}`);
-        const data = await r.json();
-        if (data.status === 'done') {
-          return { columns: data.columns || [], rows: data.rows || [] };
-        }
-        if (data.status === 'failed') throw new Error(data.error || 'IEDB job failed');
-      } catch (e) {
-        if (i === maxAttempts - 1) throw e;
-      }
-    }
-    throw new Error('IEDB polling timed out');
-  };
-
-  const runIEDBStep = async (
-    geneName: string, canonicalSeq: string, mutatedSeq: string,
-    step: number, label: string, stepNum: number, stepName: string
-  ): Promise<StepData> => {
-    updateStep(stepNum, 'running', `Submitting ${stepName}...`);
-    const r = await fetch('/api/epitopes/start', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ geneName, canonicalSeq, mutatedSeq, step, label }),
-    });
-    if (!r.ok) {
-      const err = await r.json();
-      throw new Error(err.error || `Step ${stepNum} submit failed`);
-    }
-    const { resultId } = await r.json();
-    updateStep(stepNum, 'running', `Job submitted, polling...`);
-    return pollIEDB(resultId, stepNum, stepName);
-  };
-
-  const handleRunPipeline = async () => {
-    if (!file || !geneName.trim()) {
-      setError('Please select a CSV file and enter a gene name');
-      return;
-    }
-
-    setLoading(true);
-    setError('');
-    setStep1Stats(null);
-    setTopMutations([]);
-    setRefSeq('');
-    setMutSeq('');
-    setMhciCount(0);
-    setMhciiCount(0);
-    setNeoantigensI(0);
-    setNeoantigensII(0);
-    setMsaLength(0);
-    setStepData({});
-
-    const resetSteps: Record<number, StepState> = {};
-    for (const i of [1, 2, 3, 4, 5, 6, 7, 8, 9]) resetSteps[i] = { status: 'pending' };
-    setSteps(resetSteps);
-
-    const gene = geneName.trim().toUpperCase();
-
-    try {
-      // Step 1-2
-      updateStep(1, 'running');
-      updateStep(2, 'running');
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('geneName', gene);
-
-      const res1 = await fetch('/api/process', { method: 'POST', body: formData });
-      const data1 = await res1.json();
-      if (!res1.ok) throw new Error(data1.error);
-      updateStep(1, 'completed');
-      updateStep(2, 'completed');
-      setStep1Stats(data1.stats);
-      setTopMutations(data1.topMutations);
-      setStepResult(1, { csv: data1.outputs.missense_simple });
-      setStepResult(2, { csv: data1.outputs.mutation_summary });
-
-      // Step 3
-      updateStep(3, 'running', 'Fetching reference...');
-      const res3 = await fetch('/api/reference', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ geneName: gene, missenseCSV: data1.outputs.missense_simple }),
-      });
-      const data3 = await res3.json();
-      if (!res3.ok) throw new Error(data3.error);
-      updateStep(3, 'completed', `${data3.reference.length} aa from ${data3.reference.source}`);
-      setRefSeq(data3.reference.sequence);
-      setMutSeq(data3.mutated.sequence);
-      setStepResult(3, { fasta: data3.reference.fasta });
-
-      // Step 4: MSA
-      updateStep(4, 'running', 'Submitting to EBI MAFFT...');
-      const resMsaSubmit = await fetch('/api/msa/submit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sequences: [
-            { header: `ref_${gene}`, sequence: data3.reference.sequence },
-            { header: `${gene}_mutated`, sequence: data3.mutated.sequence },
-          ],
-        }),
-      });
-      const msaSubmit = await resMsaSubmit.json();
-      if (!resMsaSubmit.ok) throw new Error(msaSubmit.error);
-
-      const msaJobId = msaSubmit.jobId;
-      let msaDone = false;
-      for (let i = 0; i < 60 && !msaDone; i++) {
-        await new Promise((r) => setTimeout(r, 5000));
-        updateStep(4, 'running', `MAFFT aligning (${(i + 1) * 5}s)...`);
-        const msaPoll = await fetch(`/api/msa/poll?jobId=${msaJobId}`);
-        const msaData = await msaPoll.json();
-        if (msaData.status === 'done') {
-          updateStep(4, 'completed', `${msaData.stats.sequences} seqs, ${msaData.stats.length} cols`);
-          setMsaLength(msaData.stats.length);
-          setStepResult(4, { fasta: msaData.alignment });
-          msaDone = true;
-        } else if (msaData.status === 'failed') {
-          throw new Error('MSA failed');
-        }
-      }
-      if (!msaDone) throw new Error('MSA timed out');
-
-      // Step 5: MHC-I (canonical + mutated)
-      updateStep(5, 'running', 'MHC-I on canonical...');
-      const mhciCanon = await runIEDBStep(gene, data3.reference.sequence, data3.mutated.sequence, 5, 'canonical', 5, 'MHC-I canonical');
-      updateStep(5, 'running', 'MHC-I on mutated...');
-      const mhciMut = await runIEDBStep(gene, data3.reference.sequence, data3.mutated.sequence, 5, 'mutated', 5, 'MHC-I mutated');
-      updateStep(5, 'completed', `${mhciMut.rows?.length || 0} mutated epitopes`);
-      setMhciCount(mhciMut.rows?.length || 0);
-      setStepResult(5, { columns: mhciMut.columns, rows: mhciMut.rows?.slice(0, 5) || [] });
-
-      // Step 6: MHC-II (canonical + mutated)
-      updateStep(6, 'running', 'MHC-II on canonical...');
-      const mhciiCanon = await runIEDBStep(gene, data3.reference.sequence, data3.mutated.sequence, 6, 'canonical', 6, 'MHC-II canonical');
-      updateStep(6, 'running', 'MHC-II on mutated...');
-      const mhciiMut = await runIEDBStep(gene, data3.reference.sequence, data3.mutated.sequence, 6, 'mutated', 6, 'MHC-II mutated');
-      updateStep(6, 'completed', `${mhciiMut.rows?.length || 0} mutated epitopes`);
-      setMhciiCount(mhciiMut.rows?.length || 0);
-      setStepResult(6, { columns: mhciiMut.columns, rows: mhciiMut.rows?.slice(0, 5) || [] });
-
-      // Step 7: B-cell (canonical + mutated)
-      updateStep(7, 'running', 'B-cell on canonical...');
-      const bcellCanon = await runIEDBStep(gene, data3.reference.sequence, data3.mutated.sequence, 7, 'canonical', 7, 'B-cell canonical');
-      updateStep(7, 'running', 'B-cell on mutated...');
-      const bcellMut = await runIEDBStep(gene, data3.reference.sequence, data3.mutated.sequence, 7, 'mutated', 7, 'B-cell mutated');
-      updateStep(7, 'completed');
-      setStepResult(7, { columns: bcellMut.columns, rows: bcellMut.rows?.slice(0, 5) || [] });
-
-      // Step 8: Real filtering (client-side — no large payload to server)
-      updateStep(8, 'running', 'Filtering neoantigens...');
-      const filterResult = step8FilterNeoantigens(
-        { success: true, columns: mhciCanon.columns || [], rows: mhciCanon.rows || [] } as IEDBResult,
-        { success: true, columns: mhciMut.columns || [], rows: mhciMut.rows || [] } as IEDBResult,
-        { success: true, columns: mhciiCanon.columns || [], rows: mhciiCanon.rows || [] } as IEDBResult,
-        { success: true, columns: mhciiMut.columns || [], rows: mhciiMut.rows || [] } as IEDBResult
-      );
-      const mhcICsv = neoantigensToCSV(filterResult.mhcI.columns, filterResult.mhcI.rows);
-      const mhcIICsv = neoantigensToCSV(filterResult.mhcII.columns, filterResult.mhcII.rows);
-      updateStep(8, 'completed', `${filterResult.mhcI.stats.neoantigensFinal} MHC-I + ${filterResult.mhcII.stats.neoantigensFinal} MHC-II`);
-      setNeoantigensI(filterResult.mhcI.stats.neoantigensFinal);
-      setNeoantigensII(filterResult.mhcII.stats.neoantigensFinal);
-      setStepResult(8, {
-        columns: filterResult.mhcI.columns,
-        rows: filterResult.mhcI.rows.slice(0, 50),
-        csv: mhcICsv,
-      });
-
-      // Extract unique peptides from filtered MHC-I neoantigens
-      const pepIdx = filterResult.mhcI.columns.indexOf('peptide');
-      const filteredPeptides: string[] = [];
-      if (pepIdx >= 0) {
-        const seen = new Set<string>();
-        for (const row of filterResult.mhcI.rows) {
-          const pep = row[pepIdx];
-          if (pep && !seen.has(pep)) {
-            seen.add(pep);
-            filteredPeptides.push(pep);
-          }
-        }
-      }
-
-      // Phase 1 complete — upload CSVs to gist and redirect to Streamlit Phase 2
-      updateStep(9, 'running', 'Uploading results for Phase 2...');
-      try {
-        const storeRes = await fetch('/api/phase1-complete', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            mhcICsv: mhcICsv,
-            mhcIICsv: mhcIICsv,
-            gene: gene,
-          }),
-        });
-        const storeData = await storeRes.json();
-        if (storeData.success && storeData.files) {
-          const params = new URLSearchParams();
-          params.set('gene', gene);
-          if (storeData.files['neoantigens_mhc_I.csv']) {
-            params.set('mhc1', storeData.files['neoantigens_mhc_I.csv']);
-          }
-          if (storeData.files['neoantigens_mhc_II.csv']) {
-            params.set('mhc2', storeData.files['neoantigens_mhc_II.csv']);
-          }
-          const url = `https://neopeptide-8k6mkfhec6jh9mrnyjxtyr.streamlit.app/?${params.toString()}`;
-          setVaxijenLink(url);
-          updateStep(9, 'completed', `Phase 1 complete — redirecting to Phase 2...`);
-          setFilteredPeptides(filteredPeptides);
-          // Auto-redirect after 3 seconds
-          setTimeout(() => { window.location.href = url; }, 3000);
-        } else {
-          throw new Error(storeData.error || 'Failed to create gist');
-        }
-      } catch (e: any) {
-        updateStep(9, 'error', `Failed to upload: ${e.message}`);
-      }
-
-    } catch (err) {
-      setError((err as Error).message);
-      setSteps((prev) => {
-        const updated = { ...prev };
-        for (const [k, v] of Object.entries(updated)) {
-          if (v.status === 'running') {
-            updated[parseInt(k)] = { status: 'error', message: (err as Error).message };
-          }
-        }
-        return updated;
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
+export default function LandingPage() {
+  const router = useRouter();
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100">
-      <header className="border-b border-gray-800 bg-gray-900/50 backdrop-blur">
-        <div className="mx-auto max-w-6xl px-6 py-4">
-          <h1 className="text-2xl font-bold tracking-tight">
-            <span className="text-emerald-400">Neo</span>Peptide
+      {/* ── Ambient Background ── */}
+      <div className="fixed inset-0 -z-10 overflow-hidden">
+        <div className="absolute -top-40 -right-40 h-[500px] w-[500px] rounded-full bg-emerald-500/[0.04] blur-[120px]" />
+        <div className="absolute -bottom-40 -left-40 h-[500px] w-[500px] rounded-full bg-cyan-500/[0.04] blur-[120px]" />
+        <div className="absolute top-1/3 left-1/2 h-[400px] w-[400px] -translate-x-1/2 rounded-full bg-violet-500/[0.02] blur-[100px]" />
+      </div>
+
+      {/* ── Hero ── */}
+      <header className="relative flex min-h-screen flex-col items-center justify-center px-6">
+        <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.015)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.015)_1px,transparent_1px)] bg-[size:60px_60px]" />
+
+        <div className="relative z-10 max-w-3xl text-center">
+          <div className="mb-8 inline-flex items-center gap-3 rounded-2xl border border-white/5 bg-white/[0.03] px-5 py-3 backdrop-blur-sm">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-500 to-cyan-500 shadow-lg shadow-emerald-500/20">
+              <svg className="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
+              </svg>
+            </div>
+            <span className="text-sm font-medium text-gray-400">Computational Vaccine Design</span>
+          </div>
+
+          <h1 className="mb-6 text-5xl font-bold tracking-tight sm:text-6xl lg:text-7xl">
+            <span className="bg-gradient-to-r from-emerald-400 via-teal-300 to-cyan-400 bg-clip-text text-transparent">
+              Vaccine Design
+            </span>
           </h1>
-          <p className="mt-1 text-sm text-gray-400">Neoantigen Vaccine Prediction Pipeline</p>
+
+          <p className="mb-4 text-lg text-gray-400 sm:text-xl">
+            NeoPeptide — An automated 15-step computational pipeline for{' '}
+            <span className="text-gray-200">neoantigen vaccine candidate identification</span>{' '}
+            in cancer immunotherapy research.
+          </p>
+
+          <p className="mx-auto mb-6 max-w-2xl text-sm leading-relaxed text-gray-500">
+            Integrates somatic mutation analysis, MHC binding prediction (IC50-based),
+            antigenicity screening, allergenicity & toxicity assessment, immunogenicity scoring,
+            physicochemical analysis, and HLA population coverage to identify
+            high-confidence peptide vaccine candidates from COSMIC or cBioPortal mutation data.
+          </p>
+
+          <div className="mx-auto mb-10 flex max-w-lg flex-wrap justify-center gap-3 text-[11px]">
+            <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-emerald-400">15-Step Pipeline</span>
+            <span className="rounded-full border border-blue-500/20 bg-blue-500/10 px-3 py-1 text-blue-400">Stop &amp; Resume</span>
+            <span className="rounded-full border border-violet-500/20 bg-violet-500/10 px-3 py-1 text-violet-400">500K+ Peptides</span>
+            <span className="rounded-full border border-amber-500/20 bg-amber-500/10 px-3 py-1 text-amber-400">cBioPortal Integration</span>
+          </div>
+
+          <button
+            onClick={() => router.push('/pipeline')}
+            className="group relative inline-flex items-center gap-3 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 px-10 py-4 text-base font-semibold text-white shadow-2xl shadow-emerald-500/25 transition-all hover:shadow-emerald-500/40 hover:brightness-110"
+          >
+            Start Analysis
+            <svg className="h-5 w-5 transition-transform group-hover:translate-x-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+            </svg>
+          </button>
+
+          {/* Pipeline steps preview */}
+          <div className="mt-16 flex flex-wrap items-center justify-center gap-1.5 text-[11px] text-gray-600">
+            {PIPELINE_STEPS.map((step, i) => (
+              <span key={step} className="flex items-center gap-1.5">
+                <span className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-white/5 bg-white/[0.03] text-[9px] text-gray-700">{i + 1}</span>
+                {step}
+                {i < PIPELINE_STEPS.length - 1 && <span className="text-gray-700">→</span>}
+              </span>
+            ))}
+          </div>
+        </div>
+
+        <div className="absolute bottom-10 left-1/2 -translate-x-1/2 animate-bounce text-gray-600">
+          <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+          </svg>
         </div>
       </header>
 
-      <main className="mx-auto max-w-6xl px-6 py-8">
-        <section className="rounded-xl border border-gray-800 bg-gray-900/50 p-6">
-          <h2 className="mb-4 text-lg font-semibold">Upload COSMIC CSV</h2>
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-end">
-            <div className="flex-1">
-              <label className="mb-1 block text-sm text-gray-400">Gene Name</label>
-              <input type="text" value={geneName} onChange={(e) => setGeneName(e.target.value)} placeholder="e.g., TP53"
-                className="w-full rounded-lg border border-gray-700 bg-gray-800 px-4 py-2.5 text-gray-100 placeholder-gray-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500" />
-            </div>
-            <div className="flex-1">
-              <label className="mb-1 block text-sm text-gray-400">CSV File</label>
-              <input type="file" accept=".csv" onChange={(e) => setFile(e.target.files?.[0] || null)}
-                className="w-full rounded-lg border border-gray-700 bg-gray-800 px-4 py-2.5 text-gray-100 file:mr-3 file:rounded-md file:border-0 file:bg-emerald-600 file:px-3 file:py-1 file:text-sm file:font-medium file:text-white hover:file:bg-emerald-500" />
-            </div>
-            <button onClick={handleRunPipeline} disabled={loading || !file || !geneName.trim()}
-              className="rounded-lg bg-emerald-600 px-6 py-2.5 font-medium text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50">
-              {loading ? (
-                <span className="flex items-center gap-2">
-                  <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
-                  Running...
-                </span>
-              ) : 'Run Pipeline'}
-            </button>
-          </div>
-          {error && <div className="mt-4 rounded-lg border border-red-800 bg-red-900/30 p-4 text-sm text-red-300">{error}</div>}
-        </section>
-
-        {(step1Stats || refSeq) && (
-          <div className="mt-8 space-y-6">
-            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-7">
-              <StatCard label="Raw Rows" value={step1Stats?.totalRawRows.toLocaleString() || '-'} />
-              <StatCard label="Missense" value={step1Stats?.totalMissense.toLocaleString() || '-'} accent />
-              <StatCard label="Unique Positions" value={step1Stats?.uniquePositions.toLocaleString() || '-'} />
-              <StatCard label="Reference AA" value={refSeq.length || '-'} />
-              <StatCard label="MSA Columns" value={msaLength || '-'} />
-              <StatCard label="MHC-I Epitopes" value={mhciCount || '-'} />
-              <StatCard label="MHC-II Epitopes" value={mhciiCount || '-'} />
-            </div>
-
-            {topMutations.length > 0 && (
-              <section className="rounded-xl border border-gray-800 bg-gray-900/50 p-6">
-                <h2 className="mb-4 text-lg font-semibold">Top 20 Mutations</h2>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead><tr className="border-b border-gray-700 text-left text-gray-400">
-                      <th className="pb-2 pr-4">#</th><th className="pb-2 pr-4">Pos</th><th className="pb-2 pr-4">Ref</th><th className="pb-2 pr-4">Alt</th><th className="pb-2 pr-4">Mutation</th><th className="pb-2 pr-4 text-right">Patients</th><th className="pb-2 text-right">MAF</th>
-                    </tr></thead>
-                    <tbody>
-                      {topMutations.map((m, i) => (
-                        <tr key={`${m.Position}-${m.Ref_AA}-${m.Alt_AA}`} className="border-b border-gray-800/50">
-                          <td className="py-2 pr-4 text-gray-500">{i + 1}</td>
-                          <td className="py-2 pr-4 font-mono">{m.Position}</td>
-                          <td className="py-2 pr-4 text-blue-400">{m.Ref_AA}</td>
-                          <td className="py-2 pr-4 text-amber-400">{m.Alt_AA}</td>
-                          <td className="py-2 pr-4 font-mono font-medium">p.{m.Ref_AA}{m.Position}{m.Alt_AA}</td>
-                          <td className="py-2 pr-4 text-right font-mono">{m.Patient_Count.toLocaleString()}</td>
-                          <td className="py-2 text-right font-mono text-gray-400">{m.MAF.toFixed(4)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </section>
-            )}
-
-            <section className="rounded-xl border border-gray-800 bg-gray-900/50 p-6">
-              <h2 className="mb-4 text-lg font-semibold">Pipeline Progress</h2>
-              <div className="space-y-1">
-                <StepRow step={1} name="Parse COSMIC CSV" state={steps[1]} data={stepData[1]} />
-                <StepRow step={2} name="Mutation Frequency" state={steps[2]} data={stepData[2]} />
-                <StepRow step={3} name="Fetch Reference" state={steps[3]} data={stepData[3]} />
-                <StepRow step={4} name="MSA Alignment (MAFFT)" state={steps[4]} data={stepData[4]} />
-                <StepRow step={5} name="MHC-I Prediction (IEDB)" state={steps[5]} data={stepData[5]} />
-                <StepRow step={6} name="MHC-II Prediction (IEDB)" state={steps[6]} data={stepData[6]} />
-                <StepRow step={7} name="B-cell Prediction (IEDB)" state={steps[7]} data={stepData[7]} />
-                <StepRow step={8} name="Neoantigen Filtering" state={steps[8]} data={stepData[8]} />
-                <StepRow step={9} name="Phase 1 → Phase 2 (Streamlit)" state={steps[9]} data={stepData[9]} vaxijenLink={vaxijenLink} />
+      {/* ── Tools & Citations ── */}
+      <section className="relative py-24 px-6">
+        <div className="mx-auto max-w-5xl">
+          {/* Disclaimer Banner */}
+          <div className="mb-12 rounded-xl border border-amber-500/20 bg-amber-500/5 p-5">
+            <div className="flex items-start gap-3">
+              <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-amber-500/10">
+                <svg className="h-3.5 w-3.5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4.5c-.77-.833-2.694-.833-3.464 0L3.34 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                </svg>
               </div>
-
-              {(neoantigensI > 0 || neoantigensII > 0) && (
-                <div className="mt-4 grid grid-cols-2 gap-4">
-                  <div className="rounded-lg bg-emerald-900/20 border border-emerald-800/30 p-4">
-                    <div className="text-sm text-emerald-400">MHC-I Neoantigens</div>
-                    <div className="mt-1 text-3xl font-bold text-emerald-300">{neoantigensI}</div>
-                  </div>
-                  <div className="rounded-lg bg-emerald-900/20 border border-emerald-800/30 p-4">
-                    <div className="text-sm text-emerald-400">MHC-II Neoantigens</div>
-                    <div className="mt-1 text-3xl font-bold text-emerald-300">{neoantigensII}</div>
-                  </div>
-                </div>
-              )}
-            </section>
+              <div>
+                <h3 className="text-sm font-semibold text-amber-300">Educational & Research Use Only</h3>
+                <p className="mt-1 text-xs leading-relaxed text-gray-400">
+                  This pipeline is built for <span className="text-gray-300">educational purposes and academic research</span> in cancer immunotherapy.
+                  The external APIs (IEDB, VaxiJen, AllerTOP, ToxinPred, MAFFT, ExPASy) are provided by their respective institutions.
+                  Please <span className="text-gray-300">do not flood these services with excessive requests</span> — use responsibly and respect their rate limits and terms of use.
+                  Misuse may disrupt services for other researchers.
+                </p>
+              </div>
+            </div>
           </div>
-        )}
-      </main>
 
-      <footer className="mt-16 border-t border-gray-800 py-6 text-center text-xs text-gray-500">NeoPeptide</footer>
-    </div>
-  );
-}
+          <div className="mb-12 text-center">
+            <span className="mb-3 inline-block rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-[11px] font-medium text-emerald-400">METHODOLOGY</span>
+            <h2 className="text-3xl font-bold tracking-tight">Tools & Citations</h2>
+            <p className="mt-3 text-sm text-gray-500">This pipeline integrates established bioinformatics tools and databases</p>
+          </div>
 
-function StatCard({ label, value, accent }: { label: string; value: string | number; accent?: boolean }) {
-  return (
-    <div className="rounded-lg border border-gray-800 bg-gray-900/50 p-4">
-      <div className="text-xs text-gray-400">{label}</div>
-      <div className={`mt-1 text-2xl font-bold ${accent ? 'text-emerald-400' : 'text-gray-100'}`}>{value}</div>
-    </div>
-  );
-}
-
-function StepRow({ step, name, state, data, vaxijenLink }: { step: number; name: string; state: StepState; data?: StepData; vaxijenLink?: string }) {
-  const icon = state.status === 'completed' ? '✓' : state.status === 'running' ? '⟳' : state.status === 'error' ? '✕' : state.status === 'waiting' ? '⏳' : step;
-  const bg = state.status === 'completed' ? 'bg-emerald-600 text-white' : state.status === 'running' ? 'bg-blue-600 text-white' : state.status === 'error' ? 'bg-red-600 text-white' : state.status === 'waiting' ? 'bg-amber-600 text-white' : 'bg-gray-800 text-gray-500';
-
-  return (
-    <div className="rounded-lg">
-      <div className={`flex items-center gap-3 px-3 py-2 text-sm ${state.status === 'running' ? 'bg-blue-900/10 rounded-lg' : ''}`}>
-        <div className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold ${bg} ${state.status === 'running' ? 'animate-pulse' : ''}`}>{icon}</div>
-        <span className={state.status === 'completed' ? 'text-gray-300' : 'text-gray-500'}>{name}</span>
-        {state.message && <span className="text-xs text-gray-500 truncate max-w-xs">({state.message})</span>}
-        {state.status === 'completed' && <span className="ml-auto text-xs text-emerald-400 shrink-0">Done</span>}
-        {state.status === 'running' && <span className="ml-auto text-xs text-blue-400 shrink-0">Running...</span>}
-        {state.status === 'error' && <span className="ml-auto text-xs text-red-400 shrink-0">Failed</span>}
-        {vaxijenLink && state.status !== 'pending' && state.status !== 'running' && (
-          <a
-            href={vaxijenLink}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="ml-auto text-xs text-amber-400 shrink-0 bg-amber-900/30 px-3 py-1 rounded-lg hover:bg-amber-800/40 border border-amber-700/30"
-          >
-            Open Phase 2 (Streamlit) →
-          </a>
-        )}
-      </div>
-
-      {state.status === 'completed' && data && (
-        <div className="ml-9">
-          {data.fasta && <FastaPreview title="FASTA Preview" fasta={data.fasta} />}
-          {data.csv && !data.columns && (
-            <DataPreview title="Results Preview" csvText={data.csv} />
-          )}
-          {data.columns && data.rows && (
-            <DataPreview title="Results Preview" columns={data.columns} rows={data.rows} />
-          )}
+          <div className="grid gap-4 sm:grid-cols-2">
+            {TOOLS.map((tool) => (
+              <a
+                key={tool.name}
+                href={tool.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="group relative overflow-hidden rounded-xl border border-white/5 bg-white/[0.02] p-5 transition-all hover:border-white/10 hover:bg-white/[0.04]"
+              >
+                <div className="absolute inset-0 bg-gradient-to-br from-emerald-500/5 to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
+                <div className="relative">
+                  <div className="mb-2 flex items-center justify-between">
+                    <h3 className="text-sm font-semibold text-gray-200">{tool.name}</h3>
+                    <svg className="h-4 w-4 text-gray-600 transition-colors group-hover:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                    </svg>
+                  </div>
+                  <p className="mb-3 text-xs leading-relaxed text-gray-500">{tool.desc}</p>
+                  <p className="text-[11px] text-gray-600 italic">{tool.citation}</p>
+                </div>
+              </a>
+            ))}
+          </div>
         </div>
-      )}
+      </section>
+
+      {/* ── Pipeline Overview ── */}
+      <section className="relative py-24 px-6">
+        <div className="mx-auto max-w-4xl">
+          <div className="mb-12 text-center">
+            <span className="mb-3 inline-block rounded-full border border-blue-500/20 bg-blue-500/10 px-3 py-1 text-[11px] font-medium text-blue-400">PIPELINE</span>
+            <h2 className="text-3xl font-bold tracking-tight">How It Works</h2>
+          </div>
+
+          <div className="space-y-4">
+            {[
+              { phase: 'Data Preparation', num: 'Steps 1-4', steps: 'Parse COSMIC/cBioPortal mutations → Mutation frequency analysis → UniProt reference sequence retrieval → MAFFT multiple sequence alignment', color: 'violet' },
+              { phase: 'Epitope Prediction', num: 'Steps 5-8', steps: 'MHC-I binding (NetMHCpan 4.1 EL+BA) → MHC-II binding → B-cell epitopes (BepiPred 3.0) → Neoantigen filtering (IC50-based deduplication across HLA variants)', color: 'blue' },
+              { phase: 'Filtering & Properties', num: 'Steps 9-13', steps: 'Pre-filter by IC50 + immunogenicity → Antigenicity (VaxiJen) → Allergenicity (AllerTOP) → Toxicity (ToxinPred) → Physicochemical (ProtParam via ExPASy)', color: 'emerald' },
+              { phase: 'Analysis & Export', num: 'Steps 14-15', steps: 'HLA population coverage analysis → Consolidation into 3 final CSVs (MHC-I, MHC-II, B-cell) → Export with all intermediate files', color: 'amber' },
+            ].map((p, i) => (
+              <div key={i} className="flex gap-4 rounded-xl border border-white/5 bg-white/[0.02] p-5">
+                <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-${p.color}-500/10 text-${p.color}-400 text-sm font-bold`}>
+                  {i + 1}
+                </div>
+                <div>
+                  <h3 className="text-sm font-semibold text-gray-200">{p.phase} <span className="text-gray-600 font-normal">{p.num}</span></h3>
+                  <p className="mt-1 text-xs text-gray-500">{p.steps}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Features */}
+          <div className="mt-12 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {[
+              { icon: '🧬', title: 'Chunked IEDB Processing', desc: 'Handles 500K+ peptides by auto-chunking sequences into 2000 aa segments with overlap, merging results across chunks' },
+              { icon: '⏸️', title: 'Stop & Resume', desc: 'Stop the pipeline mid-run and resume from where you left off. State is saved to disk after each major step' },
+              { icon: '📊', title: 'IC50-Based Filtering', desc: 'Deduplicates HLA variants by lowest IC50 binding affinity. Configurable immunogenicity and IC50 thresholds' },
+              { icon: '🌍', title: 'Population Coverage', desc: 'Calculates HLA allele frequency coverage across world populations for your candidate epitopes' },
+              { icon: '🔬', title: '3 Final CSVs', desc: 'Outputs separate MHC-I, MHC-II, and B-cell final CSVs with 72 columns of annotation per peptide' },
+              { icon: '🧮', title: 'cBioPortal Integration', desc: 'Query mutations directly from cBioPortal for 26 cancer types without needing COSMIC CSV upload' },
+            ].map((f, i) => (
+              <div key={i} className="rounded-xl border border-white/5 bg-white/[0.02] p-4">
+                <div className="text-lg mb-2">{f.icon}</div>
+                <h4 className="text-sm font-semibold text-gray-200">{f.title}</h4>
+                <p className="mt-1 text-[11px] text-gray-500">{f.desc}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── Quick Start ── */}
+      <section className="relative py-24 px-6">
+        <div className="mx-auto max-w-3xl">
+          <div className="mb-12 text-center">
+            <span className="mb-3 inline-block rounded-full border border-violet-500/20 bg-violet-500/10 px-3 py-1 text-[11px] font-medium text-violet-400">QUICK START</span>
+            <h2 className="text-3xl font-bold tracking-tight">Run on Your Machine</h2>
+          </div>
+
+          <div className="rounded-2xl border border-white/5 bg-white/[0.02] p-6 font-mono text-sm">
+            <p className="mb-3 text-gray-500 text-xs"># 1. Install Docker Desktop from docker.com</p>
+            <p className="mb-3 text-gray-500 text-xs"># 2. Clone or download this project</p>
+            <div className="mb-4 rounded-lg bg-black/30 p-4 text-emerald-400 text-xs leading-relaxed">
+              <p className="text-gray-500"># Navigate to the project folder</p>
+              <p>cd neopeptide</p>
+              <p className="mt-2 text-gray-500"># Build and start (first run takes ~5 min)</p>
+              <p>docker compose up -d --build</p>
+              <p className="mt-2 text-gray-500"># Open in browser</p>
+              <p className="text-cyan-400">http://localhost:3000</p>
+            </div>
+            <p className="text-[11px] text-gray-600">Works on Windows, macOS, and Linux. Requires Docker Desktop with 4+ GB RAM allocated.</p>
+          </div>
+        </div>
+      </section>
+
+      {/* ── Footer ── */}
+      <footer className="border-t border-white/5 py-12 px-6">
+        <div className="mx-auto max-w-4xl text-center">
+          <div className="mb-4 inline-flex items-center gap-2 rounded-xl border border-white/5 bg-white/[0.02] px-5 py-3">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-emerald-500 to-cyan-500">
+              <svg className="h-4 w-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
+              </svg>
+            </div>
+            <span className="text-sm font-semibold text-gray-300">Vaccine Design</span>
+          </div>
+          <p className="mb-2 text-sm text-gray-500">Automated Neoantigen Vaccine Prediction Pipeline</p>
+          <p className="text-xs text-gray-600">
+            Curated and developed by <span className="text-gray-400 font-medium">S. Shriya</span>
+          </p>
+          <p className="mt-2 text-[10px] text-gray-700 italic">
+            For educational and research purposes only. Please use external APIs responsibly.
+          </p>
+        </div>
+      </footer>
     </div>
   );
 }

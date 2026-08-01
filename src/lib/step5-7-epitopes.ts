@@ -1,5 +1,7 @@
 // Steps 5-7: Epitope Prediction via IEDB Next-Gen Tools API
 
+import { ipv4Fetch } from './ipv4-fetch';
+
 const IEDB_API_URL = 'https://api-nextgen-tools.iedb.org/api/v1';
 
 // 27 HLA-I alleles
@@ -40,17 +42,18 @@ export interface IEDBResult {
 export async function iedbPost(
   payload: Record<string, unknown>,
   name: string,
-  timeout = 1200
+  timeout = 7200
 ): Promise<IEDBResult> {
   console.log(`  Submitting ${name}...`);
 
   try {
     // Submit
-    const submitR = await fetch(`${IEDB_API_URL}/pipeline`, {
+    const submitR = await ipv4Fetch(`${IEDB_API_URL}/pipeline`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(300000),
+      signal: AbortSignal.timeout(600000),
+      timeout: 600000,
     });
 
     if (!submitR.ok) {
@@ -67,12 +70,14 @@ export async function iedbPost(
 
     // Poll
     const start = Date.now();
+    let pollDelay = 10000;
     while (Date.now() - start < timeout * 1000) {
-      await new Promise((r) => setTimeout(r, 5000));
+      await new Promise((r) => setTimeout(r, pollDelay));
 
       try {
-        const pollR = await fetch(`${IEDB_API_URL}/results/${resultId}`, {
-          signal: AbortSignal.timeout(30000),
+        const pollR = await ipv4Fetch(`${IEDB_API_URL}/results/${resultId}`, {
+          signal: AbortSignal.timeout(300000),
+          timeout: 300000,
         });
 
         if (!pollR.ok) continue;
@@ -86,6 +91,7 @@ export async function iedbPost(
           // Extract peptide table
           for (const t of pollData.data?.results || []) {
             if (t.type === 'peptide_table') {
+              pollDelay = 10000;
               return {
                 success: true,
                 columns: t.table_columns.map((c: { name: string }) => c.name),
@@ -103,6 +109,7 @@ export async function iedbPost(
         }
       } catch (e) {
         console.warn(`  Poll error: ${(e as Error).message}`);
+        pollDelay = Math.min(pollDelay * 1.5, 60000);
         await new Promise((r) => setTimeout(r, 10000));
       }
     }
@@ -152,6 +159,7 @@ export async function step5MHCI(
                 peptide_length_range: [9, 9],
                 predictors: [
                   { type: 'binding', method: 'netmhcpan_el' },
+                  { type: 'binding', method: 'netmhcpan_ba' },
                   {
                     type: 'processing',
                     method: 'basic_processing',
@@ -217,7 +225,7 @@ export async function step6MHCII(
               input_parameters: {
                 alleles: MHC_II_27,
                 peptide_length_range: [15, 15],
-                predictors: [{ type: 'binding', method: 'netmhciipan_el' }],
+                predictors: [{ type: 'binding', method: 'netmhciipan_el' }, { type: 'binding', method: 'netmhciipan_ba' }],
               },
             },
           ],

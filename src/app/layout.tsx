@@ -13,8 +13,11 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Srishti — Neoantigen Vaccine Pipeline",
-  description: "Automated neoepitope vaccine prediction pipeline for cancer immunotherapy research",
+  title: "Vaccine Design — Neoantigen Vaccine Prediction Pipeline",
+  description: "Automated computational pipeline for neoantigen vaccine candidate identification using IEDB, VaxiJen, AllerTOP, ToxinPred, and NetMHCpan. Curated and developed by S. Shriya.",
+  icons: {
+    icon: "/favicon.svg",
+  },
 };
 
 export default function RootLayout({
@@ -27,7 +30,7 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col bg-gray-950 text-gray-100">{children}</body>
     </html>
   );
 }

@@ -2,6 +2,7 @@
 // Submit IEDB job and return result_id (fast, <5s)
 
 import { NextRequest, NextResponse } from 'next/server';
+import { ipv4Fetch } from '@/lib/ipv4-fetch';
 
 const IEDB_API_URL = 'https://api-nextgen-tools.iedb.org/api/v1';
 
@@ -87,11 +88,12 @@ export async function POST(request: NextRequest) {
 
     console.log(`Submitting IEDB job: ${payload.pipeline_title}`);
 
-    const r = await fetch(`${IEDB_API_URL}/pipeline`, {
+    const r = await ipv4Fetch(`${IEDB_API_URL}/pipeline`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(60000),
+      signal: AbortSignal.timeout(120000),
+      timeout: 180000,
     });
 
     if (!r.ok) {

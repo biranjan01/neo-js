@@ -19,7 +19,7 @@ function parseFasta(text: string): string {
 
 async function fetchUniProt(geneName: string): Promise<Step3Result | null> {
   try {
-    const url = `https://rest.uniprot.org/uniprotkb/search?query=gene:${geneName}+AND+organism:9606+AND+reviewed:true&format=json&size=1`;
+    const url = `https://rest.uniprot.org/uniprotkb/search?query=gene:${geneName}+AND+organism_id:9606+AND+reviewed:true&format=json&size=1`;
     const r = await fetch(url, { signal: AbortSignal.timeout(30000) });
     if (!r.ok) return null;
 

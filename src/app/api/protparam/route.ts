@@ -1,13 +1,13 @@
 // API Route: POST /api/protparam
-// Step 12: ProtParam Physicochemical Properties
+// Step 12: ProtParam Physicochemical Properties via ExPASy
 
 import { NextRequest, NextResponse } from 'next/server';
-import { runProtparam, mergeProtparamIntoRows } from '@/lib/step12-protparam';
+import { runProtparam } from '@/lib/step12-protparam';
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { peptides, columns, rows } = body;
+    const { peptides } = body;
 
     if (!peptides || !Array.isArray(peptides) || peptides.length === 0) {
       return NextResponse.json(
@@ -22,31 +22,14 @@ export async function POST(request: NextRequest) {
     const ppResult = await runProtparam(peptides);
 
     if (!ppResult.success) {
-      return NextResponse.json({
-        success: false,
-        error: 'ProtParam API failed for all peptides',
-      });
-    }
-
-    // Merge results into rows if provided
-    let mergedColumns = columns || [];
-    let mergedRows = rows || [];
-
-    if (columns && rows && rows.length > 0) {
-      const merged = mergeProtparamIntoRows(columns, rows, ppResult.results);
-      mergedColumns = merged.columns;
-      mergedRows = merged.rows;
+      console.warn('  ExPASy ProtParam failed for all peptides — returning empty results');
     }
 
     return NextResponse.json({
-      success: true,
+      success: ppResult.results.length > 0,
       step: 12,
       stats: ppResult.stats,
-      columns: mergedColumns,
-      rows: mergedRows.slice(0, 50),
-      fullCsv: mergedColumns.length > 0
-        ? [mergedColumns.join(','), ...mergedRows.map((r: string[]) => r.join(','))].join('\n')
-        : '',
+      results: ppResult.results,
     });
   } catch (error) {
     console.error('ProtParam error:', error);
