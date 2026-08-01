@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
-    <loc>https://neopeptide.vercel.app/</loc>
+    <loc>https://neopeptide-rho.vercel.app/</loc>
     <lastmod>2026-08-01</lastmod>
     <changefreq>weekly</changefreq>
     <priority>1.0</priority>
   </url>
   <url>
-    <loc>https://neopeptide.vercel.app/pipeline</loc>
+    <loc>https://neopeptide-rho.vercel.app/pipeline</loc>
     <lastmod>2026-08-01</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.9</priority>

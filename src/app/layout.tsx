@@ -12,7 +12,7 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-const SITE_URL = "https://neopeptide.vercel.app";
+const SITE_URL = "https://neopeptide-rho.vercel.app";
 
 export const metadata: Metadata = {
   title: "NeoPeptide — Neoantigen Vaccine Prediction Pipeline | Cancer Immunotherapy",
