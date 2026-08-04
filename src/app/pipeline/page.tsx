@@ -724,7 +724,7 @@ function PipelineInner() {
 
       // ─── Step 9: VaxiJen (on pre-filtered peptides) ───
       updateStep(9, 'running', `Predicting antigenicity for ${preFilteredPeptides.length} peptides...`);
-      const vaxRes = await fetch(`${BACKEND}/api/vaxijen`, {
+      const vaxRes = await fetch(`${BACKEND}/api/antigenicity`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sequences: preFilteredPeptides }),

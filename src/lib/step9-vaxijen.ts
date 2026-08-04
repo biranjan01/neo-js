@@ -68,7 +68,7 @@ export async function runVaxijen(peptides: string[]): Promise<VaxijenResult> {
 
   // Try the server-side API first (curl_cffi with Chrome impersonation)
   try {
-    const res = await fetch('/api/vaxijen', {
+    const res = await fetch('/api/antigenicity', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ peptides: uniquePeptides }),

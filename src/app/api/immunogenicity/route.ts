@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { callStreamlitApp, STREAMLIT_IMMUNO } from '@/lib/streamlit-client';
+import { callFlaskEndpoint } from '@/lib/streamlit-client';
 
 export async function POST(req: NextRequest) {
   try {
@@ -20,11 +20,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(results);
     }
 
-    if (!STREAMLIT_IMMUNO) {
-      return NextResponse.json({ detail: 'Streamlit immunogenicity app URL not configured' }, { status: 500 });
-    }
-
-    const results = await callStreamlitApp(STREAMLIT_IMMUNO, sequences, {
+    const results = await callFlaskEndpoint('/immunogenicity', {
+      sequences,
       target: 'tumour',
     });
 

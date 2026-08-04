@@ -23,7 +23,7 @@ def vaxijen():
     import httpx
     from camoufox.sync_api import Camoufox
 
-    with Camoufox(headless="virtual", humanize=True) as browser:
+    with Camoufox(headless=True, humanize=True, args=["--no-sandbox"]) as browser:
         page = browser.new_page()
         page.goto("https://www.ddg-pharmfac.net/vaxijen/VaxiJen/VaxiJen.html", wait_until="networkidle", timeout=90000)
         title = page.title()
@@ -78,7 +78,7 @@ def immunogenicity():
     batches = [sequences[i:i+BATCH] for i in range(0, len(sequences), BATCH)]
     results = []
 
-    with Camoufox(headless="virtual", humanize=True) as browser:
+    with Camoufox(headless=True, humanize=True, args=["--no-sandbox"]) as browser:
         page = browser.new_page()
         page.goto(VAXIJEN3_URL, wait_until="networkidle", timeout=90000)
         title = page.title()
@@ -213,7 +213,7 @@ def allertop():
     from camoufox.sync_api import Camoufox
 
     results = []
-    with Camoufox(headless="virtual", humanize=True) as browser:
+    with Camoufox(headless=True, humanize=True, args=["--no-sandbox"]) as browser:
         page = browser.new_page()
         page.goto(ALLERTOP_URL, wait_until="networkidle", timeout=90000)
         title = page.title()
@@ -341,7 +341,7 @@ def toxinpred():
     from camoufox.sync_api import Camoufox
 
     results = []
-    with Camoufox(headless="virtual", humanize=True) as browser:
+    with Camoufox(headless=True, humanize=True, args=["--no-sandbox"]) as browser:
         page = browser.new_page()
         page.goto(TOXINPRED_URL, wait_until="networkidle", timeout=90000)
         title = page.title()
@@ -418,7 +418,9 @@ def population():
     if not epitope_alleles:
         return jsonify({"error": "No epitope-allele pairs"}), 400
 
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "streamlit-apps", "popcoverage", "population_coverage"))
+    docker_path = "/app/population_coverage"
+    local_path = os.path.join(os.path.dirname(__file__), "..", "streamlit-apps", "popcoverage", "population_coverage")
+    sys.path.insert(0, docker_path if os.path.isdir(docker_path) else local_path)
     from population_calculation import PopulationCoverage
 
     input_lines = []

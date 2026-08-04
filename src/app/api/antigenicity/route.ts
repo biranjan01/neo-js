@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { callStreamlitApp, STREAMLIT_VAXIJEN } from '@/lib/streamlit-client';
+import { callFlaskEndpoint } from '@/lib/streamlit-client';
 
 export async function POST(req: NextRequest) {
   try {
@@ -18,7 +18,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(results);
     }
 
-    const results = await callStreamlitApp(STREAMLIT_VAXIJEN, sequences, {
+    const results = await callFlaskEndpoint('/vaxijen', {
+      sequences,
       target: 'tumour',
       threshold: '0.5',
     });

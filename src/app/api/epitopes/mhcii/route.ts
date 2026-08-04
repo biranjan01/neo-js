@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { oldIEDBMHCII } from '@/lib/step5-7-epitopes';
 import { setProgress } from '@/app/api/progress/route';
 
-export const maxDuration = 600;
+export const maxDuration = 300;
 
 export async function POST(request: NextRequest) {
   try {

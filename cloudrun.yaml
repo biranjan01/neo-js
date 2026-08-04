@@ -1,0 +1,30 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: neo-js-api
+  annotations:
+    run.googleapis/ingress: all
+spec:
+  template:
+    metadata:
+      annotations:
+        run.googleapis/execution-environment: gen2
+    spec:
+      containerConcurrency: 4
+      containers:
+        - image: gcr.io/YOUR_PROJECT_ID/neo-js-api
+          ports:
+            - containerPort: 5000
+          env:
+            - name: FLASK_ENV
+              value: production
+          resources:
+            limits:
+              memory: 2Gi
+              cpu: "2"
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 5000
+            initialDelaySeconds: 60
+            periodSeconds: 10

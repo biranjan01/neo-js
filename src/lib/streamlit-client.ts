@@ -1,8 +1,10 @@
-const STREAMLIT_VAXIJEN = process.env.STREAMLIT_VAXIJEN_URL || 'https://antigenicity.streamlit.app';
-const STREAMLIT_IMMUNO = process.env.STREAMLIT_IMMUNO_URL || 'https://immunogenicity.streamlit.app';
-const STREAMLIT_ALLERTOP = process.env.STREAMLIT_ALLERTOP_URL || 'https://allergenicity.streamlit.app';
-const STREAMLIT_TOXINPRED = process.env.STREAMLIT_TOXINPRED_URL || 'https://toxicities.streamlit.app';
-const STREAMLIT_POPCOVERAGE = process.env.STREAMLIT_POPCOVERAGE_URL || 'https://popcoverage.streamlit.app';
+const FLASK_API = process.env.FLASK_API_URL || 'http://localhost:5000';
+
+const STREAMLIT_VAXIJEN = FLASK_API;
+const STREAMLIT_IMMUNO = FLASK_API;
+const STREAMLIT_ALLERTOP = FLASK_API;
+const STREAMLIT_TOXINPRED = FLASK_API;
+const STREAMLIT_POPCOVERAGE = FLASK_API;
 
 export interface StepResult {
   sequence: string;
@@ -12,50 +14,20 @@ export interface StepResult {
   error?: string | null;
 }
 
-async function callStreamlitApp(
-  appUrl: string,
-  sequences: string[],
-  extraParams: Record<string, string> = {}
-): Promise<StepResult[]> {
-  const jobId = `${Date.now()}`;
-  const params = new URLSearchParams({
-    mode: 'upload',
-    seqs: JSON.stringify(sequences),
-    job: jobId,
-    ...extraParams,
+async function callFlaskEndpoint(
+  endpoint: string,
+  body: Record<string, unknown>,
+): Promise<any> {
+  const url = `${FLASK_API}${endpoint}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(18000000),
   });
-
-  const url = `${appUrl}?${params.toString()}`;
-  const res = await fetch(url, { signal: AbortSignal.timeout(18000000) });
-  const html = await res.text();
-
-  const jsonMatch = html.match(/<pre[^>]*>([\s\S]*?)<\/pre>/i)
-    || html.match(/data-testid="stJSON"[^>]*>([\s\S]*?)<\/div>/i)
-    || html.match(/\{[\s\S]*"total"[\s\S]*"data"[\s\S]*\}/);
-
-  if (jsonMatch) {
-    try {
-      const jsonStr = jsonMatch[1] || jsonMatch[0];
-      const parsed = JSON.parse(jsonStr.replace(/<[^>]+>/g, ''));
-      if (parsed.data) return parsed.data;
-      if (Array.isArray(parsed)) return parsed;
-    } catch {
-      // fallback: try to extract result objects
-    }
-  }
-
-  const results: StepResult[] = [];
-  for (const seq of sequences) {
-    const seqEscaped = seq.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const predMatch = html.match(new RegExp(seqEscaped + '[\\s\\S]{0,200}?(ANTIGEN|NON-ANTIGEN|IMMUNOGEN|NON-IMMUNOGEN|ALLERGEN|NON-ALLERGEN|Toxin|Non-Toxin)', 'i'));
-    const scoreMatch = html.match(new RegExp(seqEscaped + '[\\s\\S]{0,200}?score["\':\\s]+([\\d.]+)', 'i'));
-    results.push({
-      sequence: seq,
-      prediction: predMatch ? predMatch[1] : 'Unknown',
-      score: scoreMatch ? parseFloat(scoreMatch[1]) : null,
-    });
-  }
-  return results;
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || data.detail || `Flask ${endpoint} failed`);
+  return data;
 }
 
-export { callStreamlitApp, STREAMLIT_VAXIJEN, STREAMLIT_IMMUNO, STREAMLIT_ALLERTOP, STREAMLIT_TOXINPRED, STREAMLIT_POPCOVERAGE };
+export { callFlaskEndpoint, STREAMLIT_VAXIJEN, STREAMLIT_IMMUNO, STREAMLIT_ALLERTOP, STREAMLIT_TOXINPRED, STREAMLIT_POPCOVERAGE, FLASK_API };
