@@ -69,7 +69,7 @@ export async function POST(request: NextRequest) {
         hotspotCount: step2.hotspotCount,
         totalSamples: step2.totalSamples,
       },
-      topMutations: step2.summary.slice(0, 20),
+      topMutations: step2.summary.slice(0, 10),
       outputs: {
         missense_simple: missenseCSV,
         mutation_summary: frequencyCSV,

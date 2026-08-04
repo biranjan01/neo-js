@@ -123,110 +123,54 @@ def _dummy_toxinpred(sequences):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# STEP 9: VAXIJEN — Browser once, form submit per peptide
+# STEP 9: VAXIJEN — 2 parallel Camoufox browsers, retry failed batches
 # ═══════════════════════════════════════════════════════════════════════════════
-@app.post("/api/vaxijen", response_model=list[StepResult])
-async def vaxijen_predict(req: SeqRequest):
-    # Dummy mode: return mock results instantly
-    if req.dummy:
-        return _dummy_vaxijen(req.sequences)
 
+async def _vaxijen_single_browser(sequences: list[str], batch_label: str) -> dict[str, StepResult]:
+    """Run VaxiJen on a batch of peptides using a single Camoufox browser."""
     from camoufox.async_api import AsyncCamoufox
+    results: dict[str, StepResult] = {}
 
-    _log(f"VaxiJen: {len(req.sequences)} peptides")
-    results_map = {}
+    try:
+        async with AsyncCamoufox(headless=True) as browser:
+            page = await browser.new_page()
 
-    async with AsyncCamoufox(headless=True) as browser:
-        page = await browser.new_page()
+            _log(f"  [{batch_label}] Loading form + Cloudflare...")
+            await page.goto(VAXIJEN_FORM, wait_until="domcontentloaded", timeout=180000)
 
-        # Step 1: Load form page, pass Cloudflare
-        _log("  Loading form page + Cloudflare...")
-        await page.goto(VAXIJEN_FORM, wait_until="domcontentloaded", timeout=180000)
-
-        # Wait for Cloudflare challenge to resolve
-        ta = None
-        for i in range(40):
-            await asyncio.sleep(3)
-            title = await page.title()
-            if "just a moment" in title.lower():
-                _log(f"  Cloudflare challenge active, waiting... ({i*3}s)")
-                continue
-            ta = await page.query_selector("textarea")
-            if ta:
-                break
-            if "vaxijen" in title.lower():
-                ta = await page.query_selector("textarea")
-                if ta:
-                    break
-        if not ta:
-            raise ValueError("Cloudflare stuck — could not find textarea")
-        _log("  Cloudflare passed")
-
-        # Step 2: Select Tumour once
-        try:
-            await page.select_option("select", label="Tumour")
-        except Exception:
-            pass
-
-        # Step 3: Submit each peptide via form click (fetch() loses Cloudflare cookies)
-        _log(f"  Submitting {len(req.sequences)} peptides via form...")
-
-        for seq in req.sequences:
-            # Navigate back to form each time
-            await page.goto(VAXIJEN_FORM, wait_until="domcontentloaded", timeout=120000)
-            for i in range(15):
-                await asyncio.sleep(2)
-                ta = await page.query_selector("textarea")
-                if ta:
-                    break
+            ta = None
+            for i in range(40):
+                await asyncio.sleep(3)
                 title = await page.title()
+                if "just a moment" in title.lower():
+                    continue
+                ta = await page.query_selector("textarea")
+                if ta:
+                    break
                 if "vaxijen" in title.lower():
                     ta = await page.query_selector("textarea")
                     if ta:
                         break
             if not ta:
-                results_map[seq] = StepResult(sequence=seq, error="textarea not found")
-                continue
+                for seq in sequences:
+                    results[seq] = StepResult(sequence=seq, error="cloudflare stuck")
+                return results
+            _log(f"  [{batch_label}] Cloudflare passed")
 
-            # Select Tumour
-            try:
-                await page.select_option("select", label="Tumour")
-            except Exception:
-                pass
-
-            # Fill and submit
-            await ta.fill(seq)
-            submit = await page.query_selector("input[type='submit']")
-            if submit:
-                await submit.click()
-            try:
-                await page.wait_for_load_state("domcontentloaded", timeout=60000)
-            except Exception:
-                pass
-            await asyncio.sleep(3)
-
-            html = await page.content()
-            text = re.sub(r"<[^>]+>", " ", html)
-            m = re.search(r"Overall Prediction for the Protective Antigen\s*=\s*(-?[\d.]+)\s*\(.*?(?:Probable\s*)?(ANTIGEN|NON-ANTIGEN)", text, re.IGNORECASE)
-            if m:
-                pred = "NON-ANTIGEN" if "NON" in m.group(2).upper() else "ANTIGEN"
-                results_map[seq] = StepResult(sequence=seq, score=float(m.group(1)), prediction=pred)
-                _log(f"    {seq[:20]}... -> {pred} ({m.group(1)})")
-            else:
-                results_map[seq] = StepResult(sequence=seq, error="no match in response")
-                _log(f"    {seq[:20]}... -> NO MATCH")
-
-        # Retry failed peptides
-        failed_seqs = [seq for seq, r in results_map.items() if r.error]
-        if failed_seqs:
-            _log(f"  Retrying {len(failed_seqs)} failed peptides...")
-            for seq in failed_seqs:
-                await page.goto(VAXIJEN_FORM, wait_until="domcontentloaded", timeout=60000)
-                for i in range(10):
+            for seq in sequences:
+                await page.goto(VAXIJEN_FORM, wait_until="domcontentloaded", timeout=120000)
+                for i in range(15):
                     await asyncio.sleep(2)
                     ta = await page.query_selector("textarea")
-                    if ta: break
+                    if ta:
+                        break
+                    title = await page.title()
+                    if "vaxijen" in title.lower():
+                        ta = await page.query_selector("textarea")
+                        if ta:
+                            break
                 if not ta:
+                    results[seq] = StepResult(sequence=seq, error="textarea not found")
                     continue
                 try:
                     await page.select_option("select", label="Tumour")
@@ -241,18 +185,66 @@ async def vaxijen_predict(req: SeqRequest):
                 except Exception:
                     pass
                 await asyncio.sleep(3)
+
                 html = await page.content()
                 text = re.sub(r"<[^>]+>", " ", html)
                 m = re.search(r"Overall Prediction for the Protective Antigen\s*=\s*(-?[\d.]+)\s*\(.*?(?:Probable\s*)?(ANTIGEN|NON-ANTIGEN)", text, re.IGNORECASE)
                 if m:
                     pred = "NON-ANTIGEN" if "NON" in m.group(2).upper() else "ANTIGEN"
-                    results_map[seq] = StepResult(sequence=seq, score=float(m.group(1)), prediction=pred)
-                    _log(f"    RETRY OK: {seq[:20]}... -> {pred} ({m.group(1)})")
+                    results[seq] = StepResult(sequence=seq, score=float(m.group(1)), prediction=pred)
+                    _log(f"  [{batch_label}] {seq[:20]}... -> {pred} ({m.group(1)})")
                 else:
-                    _log(f"    RETRY FAIL: {seq[:20]}...")
+                    results[seq] = StepResult(sequence=seq, error="no match")
+                    _log(f"  [{batch_label}] {seq[:20]}... -> NO MATCH")
+    except Exception as e:
+        _log(f"  [{batch_label}] Browser crashed: {e}")
+        for seq in sequences:
+            if seq not in results:
+                results[seq] = StepResult(sequence=seq, error=str(e))
+
+    return results
+
+
+@app.post("/api/vaxijen", response_model=list[StepResult])
+async def vaxijen_predict(req: SeqRequest):
+    if req.dummy:
+        return _dummy_vaxijen(req.sequences)
+
+    seqs = req.sequences
+    n = len(seqs)
+    _log(f"VaxiJen: {n} peptides (2 parallel browsers, waves of 15)")
+
+    if n <= 5:
+        results = await _vaxijen_single_browser(seqs, "all")
+        _cleanup()
+        return [results.get(s, StepResult(sequence=s, error="missing")) for s in seqs]
+
+    CHUNK = 15
+    all_results: dict[str, StepResult] = {}
+
+    chunks = [seqs[i:i+CHUNK] for i in range(0, n, CHUNK)]
+    num_waves = (len(chunks) + 1) // 2
+    _log(f"  {len(chunks)} chunks of ≤{CHUNK}, {num_waves} waves of 2")
+
+    for wave_idx in range(0, len(chunks), 2):
+        pair = chunks[wave_idx:wave_idx+2]
+        labels = ["A", "B"] if len(pair) == 2 else ["A"]
+        _log(f"  Wave {wave_idx//2+1}/{num_waves}: {labels[0]}({len(pair[0])})" +
+             (f" + {labels[1]}({len(pair[1])})" if len(pair) > 1 else ""))
+        results = await asyncio.gather(*[
+            _vaxijen_single_browser(batch, labels[i]) for i, batch in enumerate(pair)
+        ])
+        for r in results:
+            all_results.update(r)
+
+    failed = [s for s in seqs if s in all_results and all_results[s].error]
+    if failed:
+        _log(f"  Retrying {len(failed)} failed peptides sequentially...")
+        retry_results = await _vaxijen_single_browser(failed, "retry")
+        all_results.update(retry_results)
 
     _cleanup()
-    return [results_map.get(seq, StepResult(sequence=seq, error="missing")) for seq in req.sequences]
+    return [all_results.get(s, StepResult(sequence=s, error="missing")) for s in seqs]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -444,6 +436,208 @@ async def allertop_predict(req: SeqRequest):
         traceback.print_exc()
         for seq in req.sequences:
             results.append(StepResult(sequence=seq, prediction="Error", error=str(e)))
+
+    _cleanup()
+    return results
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# STEP 9b: VAXIJEN 3.0 IMMUNOGENICITY — Browser, Cloudflare, register, login, form submit
+# ═══════════════════════════════════════════════════════════════════════════════
+VAXIJEN3_URL = "https://www.ddg-pharmfac.net/vaxijen3/home/"
+
+
+def _dummy_immunogenicity(sequences):
+    """Dummy immunogenicity: random results for dev/testing"""
+    _log("  [DUMMY] Returning mock immunogenicity results")
+    results = []
+    for seq in sequences:
+        pred = random.choice(["IMMUNOGEN", "NON-IMMUNOGEN"])
+        prob = round(random.uniform(50, 100), 1) if pred == "IMMUNOGEN" else round(random.uniform(0, 49), 1)
+        results.append(StepResult(sequence=seq, score=prob, prediction=pred))
+    return results
+
+
+@app.post("/api/immunogenicity", response_model=list[StepResult])
+async def immunogenicity_predict(req: SeqRequest):
+    if req.dummy:
+        return _dummy_immunogenicity(req.sequences)
+    from camoufox.async_api import AsyncCamoufox
+    import tempfile, os, uuid
+
+    BATCH = 100
+    n = len(req.sequences)
+    batches = [req.sequences[i:i+BATCH] for i in range(0, n, BATCH)]
+    _log(f"VaxiJen 3.0 Immunogenicity: {n} peptides in {len(batches)} batches of ≤{BATCH}")
+    results = []
+
+    try:
+        async with AsyncCamoufox(headless=True) as browser:
+            page = await browser.new_page()
+
+            _log("  Loading VaxiJen 3.0 + Cloudflare...")
+            await page.goto(VAXIJEN3_URL, wait_until="commit", timeout=180000)
+            for _ in range(30):
+                await asyncio.sleep(3)
+                title = await page.title()
+                if "just a moment" not in title.lower():
+                    break
+            try:
+                await page.wait_for_load_state("networkidle", timeout=30000)
+            except Exception:
+                pass
+            await asyncio.sleep(3)
+            _log(f"  Cloudflare passed, URL: {page.url}")
+
+            _uname = f"neo_{uuid.uuid4().hex[:8]}"
+            _email = f"{_uname}@neopeptide.app"
+            _pw = "N30Pep!2024xZ"
+
+            _log(f"  Registering: {_uname}")
+            try:
+                await page.goto("https://www.ddg-pharmfac.net/vaxijen3/accounts/signup/", wait_until="networkidle", timeout=60000)
+                await asyncio.sleep(2)
+                for sel, val in [
+                    ("#id_username", _uname),
+                    ("#id_email", _email),
+                    ("#id_password1", _pw),
+                    ("#id_password2", _pw),
+                ]:
+                    el = await page.query_selector(sel)
+                    if el:
+                        await el.click()
+                        await el.type(val, delay=50)
+                await asyncio.sleep(1)
+                await page.click("button[type='submit'], input[type='submit']")
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=30000)
+                except Exception:
+                    pass
+                await asyncio.sleep(3)
+                errors = await page.evaluate("() => Array.from(document.querySelectorAll('.errorlist, .alert-danger')).map(e => e.textContent.trim()).filter(Boolean)")
+                if errors:
+                    _log(f"  Register errors: {errors}")
+            except Exception as e:
+                _log(f"  Register failed: {e}")
+
+            _log("  Logging in...")
+            try:
+                await page.goto("https://www.ddg-pharmfac.net/vaxijen3/accounts/login/?next=/vaxijen3/", wait_until="networkidle", timeout=60000)
+                await asyncio.sleep(3)
+                for field_name, val in [("username", _uname), ("email", _email), ("password", _pw)]:
+                    el = await page.query_selector(f"#id_{field_name}")
+                    if el:
+                        await el.click()
+                        await el.type(val, delay=50)
+                await asyncio.sleep(1)
+                await page.click("button[type='submit'], input[type='submit']")
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=30000)
+                except Exception:
+                    pass
+                await asyncio.sleep(3)
+                _log(f"  After login URL: {page.url}")
+            except Exception as e:
+                _log(f"  Login failed: {e}")
+
+            await page.goto(VAXIJEN3_URL, wait_until="networkidle", timeout=60000)
+            await asyncio.sleep(2)
+            _log(f"  Ready, URL: {page.url}")
+
+            logged_in = await page.evaluate("() => document.body.innerText.includes('Log Out') || document.body.innerText.includes('logout')")
+            _log(f"  Logged in: {logged_in}")
+
+            for batch_idx, batch_seqs in enumerate(batches):
+                batch_offset = batch_idx * BATCH
+                _log(f"  Batch {batch_idx+1}/{len(batches)}: {len(batch_seqs)} peptides (offset {batch_offset})")
+
+                fasta_lines = []
+                for i, seq in enumerate(batch_seqs):
+                    fasta_lines.append(f">seq{i}")
+                    fasta_lines.append(seq)
+                fasta_content = "\n".join(fasta_lines) + "\n"
+
+                tmp_path = os.path.join(tempfile.gettempdir(), f"vaxijen_{uuid.uuid4().hex[:8]}.fasta")
+                with open(tmp_path, "w") as f:
+                    f.write(fasta_content)
+
+                file_input = await page.query_selector("input[type='file']")
+                if file_input:
+                    await file_input.set_input_files(tmp_path)
+                    await asyncio.sleep(2)
+                else:
+                    ta = await page.query_selector("textarea[name='sequence']") or await page.query_selector("textarea")
+                    if ta:
+                        await ta.fill(fasta_content)
+
+                try:
+                    await page.select_option("select[name='organism']", label="tumor peptide")
+                except Exception:
+                    try:
+                        await page.select_option("select", label="tumor peptide")
+                    except Exception:
+                        pass
+
+                await asyncio.sleep(1)
+
+                submit_btn = await page.query_selector("button[type='submit']") or await page.query_selector("input[type='submit']")
+                if submit_btn:
+                    await submit_btn.click()
+
+                try:
+                    await page.wait_for_load_state("domcontentloaded", timeout=120000)
+                except Exception:
+                    pass
+
+                for i in range(40):
+                    html = await page.content()
+                    text = re.sub(r"<[^>]+>", " ", html)
+                    n_results = len(re.findall(r"Results for protein seq\d+", text))
+                    if n_results >= len(batch_seqs):
+                        break
+                    await asyncio.sleep(5)
+
+                await asyncio.sleep(3)
+                html = await page.content()
+                text_clean = re.sub(r"<[^>]+>", " ", html)
+                text_clean = re.sub(r"\s+", " ", text_clean)
+
+                batch_found = 0
+                for i, seq in enumerate(batch_seqs):
+                    pat = re.compile(
+                        rf"Results for protein seq{i}:\s*Probable\s+(IMMUNOGEN|NON-IMMUNOGEN)\s+with\s+a\s+probability\s+of\s+([\d.]+)%",
+                        re.IGNORECASE
+                    )
+                    m = pat.search(text_clean)
+                    if m:
+                        pred = m.group(1).upper()
+                        prob = float(m.group(2))
+                        results.append(StepResult(sequence=seq, score=prob, prediction=pred))
+                        batch_found += 1
+                    else:
+                        results.append(StepResult(sequence=seq, prediction="Unknown"))
+
+                _log(f"  Batch {batch_idx+1} done: {batch_found}/{len(batch_seqs)} found")
+
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
+
+                if batch_idx < len(batches) - 1:
+                    await page.goto(VAXIJEN3_URL, wait_until="networkidle", timeout=60000)
+                    await asyncio.sleep(2)
+
+            _log(f"  Immunogenicity complete: {len([r for r in results if r.prediction not in ('Unknown','Error')])}/{n} found")
+
+    except Exception as e:
+        _log(f"  VaxiJen 3.0 error: {e}")
+        import traceback
+        traceback.print_exc()
+        found_seqs = {r.sequence for r in results}
+        for seq in req.sequences:
+            if seq not in found_seqs:
+                results.append(StepResult(sequence=seq, prediction="Error", error=str(e)))
 
     _cleanup()
     return results

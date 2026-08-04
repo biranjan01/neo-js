@@ -1,8 +1,9 @@
-// Steps 5-7: Epitope Prediction via IEDB Next-Gen Tools API
+// Steps 5-7: Epitope Prediction via IEDB APIs (Hybrid: Old Tools API + Next-Gen API)
 
 import { ipv4Fetch } from './ipv4-fetch';
 
 const IEDB_API_URL = 'https://api-nextgen-tools.iedb.org/api/v1';
+const IEDB_OLD_API_URL = 'https://tools-cluster-interface.iedb.org/tools_api';
 
 // 27 HLA-I alleles
 export const MHC_I_27 = [
@@ -37,9 +38,30 @@ export interface IEDBResult {
 }
 
 /**
- * Submit job to IEDB API and poll until done
+ * Submit job to IEDB API and poll until done. Retries up to 2 times on failure.
  */
 export async function iedbPost(
+  payload: Record<string, unknown>,
+  name: string,
+  timeout = 7200,
+  maxRetries = 2
+): Promise<IEDBResult> {
+  for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
+    if (attempt > 1) {
+      console.log(`  ⚠ ${name} failed, retry ${attempt - 1}/${maxRetries} after 3s...`);
+      await new Promise(r => setTimeout(r, 3000));
+    }
+
+    const result = await iedbPostOnce(payload, name, timeout);
+    if (result.success) return result;
+
+    console.log(`  ✗ ${name} attempt ${attempt} failed: ${result.error}`);
+    if (attempt > maxRetries) return result;
+  }
+  return { success: false, columns: [], rows: [], error: 'Exceeded max retries' };
+}
+
+async function iedbPostOnce(
   payload: Record<string, unknown>,
   name: string,
   timeout = 7200
@@ -199,6 +221,88 @@ export async function iedbPost(
 }
 
 /**
+ * Old IEDB Tools API - MHC-II binding (synchronous, fast)
+ * Returns: allele, seq_num, start, end, length, core_peptide, peptide, score, rank
+ * Maps columns to match New API format for downstream compatibility
+ */
+export async function oldIEDBMHCII(
+  geneName: string,
+  canonical: string,
+  mutated: string,
+  onProgress?: (current: number, total: number, message: string) => void
+): Promise<{ canonical: IEDBResult; mutated: IEDBResult }> {
+  const mhciiSingle = async (label: string, seq: string): Promise<IEDBResult> => {
+    const fasta = `>${geneName}_${label}\n${seq}`;
+    const body = new URLSearchParams();
+    body.append('method', 'netmhciipan_el');
+    body.append('sequence_text', fasta);
+    body.append('allele', MHC_II_27);
+    body.append('length', '15');
+
+    console.log(`  Submitting Old IEDB MHC-II ${label}...`);
+    const res = await ipv4Fetch(`${IEDB_OLD_API_URL}/mhcii/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString(),
+      signal: AbortSignal.timeout(300000),
+      timeout: 300000,
+    });
+
+    if (!res.ok) {
+      return { success: false, columns: [], rows: [], error: `Old IEDB MHC-II failed: ${res.status}` };
+    }
+
+    const text = await res.text();
+    const lines = text.split('\n').filter(l => l.trim() && !l.startsWith('#'));
+    if (lines.length < 2) {
+      return { success: false, columns: [], rows: [], error: 'No data returned' };
+    }
+
+    const oldColumns = lines[0].split('\t');
+    const oldRows = lines.slice(1).map(l => l.split('\t'));
+
+    // Map Old API columns to New API format for downstream compatibility
+    const columns = [
+      'seq #', 'peptide', 'start', 'end', 'peptide length', 'allele',
+      'median_percentile', 'netmhciipan_el_score', 'netmhciipan_el_percentile'
+    ];
+
+    const alleleIdx = oldColumns.indexOf('allele');
+    const seqNumIdx = oldColumns.indexOf('seq_num');
+    const startIdx = oldColumns.indexOf('start');
+    const endIdx = oldColumns.indexOf('end');
+    const lengthIdx = oldColumns.indexOf('length');
+    const peptideIdx = oldColumns.indexOf('peptide');
+    const scoreIdx = oldColumns.indexOf('score');
+    const rankIdx = oldColumns.indexOf('rank');
+
+    const rows = oldRows.map(row => [
+      row[seqNumIdx] || '1',
+      row[peptideIdx] || '',
+      row[startIdx] || '',
+      row[endIdx] || '',
+      row[lengthIdx] || '',
+      row[alleleIdx] || '',
+      row[rankIdx] || '',
+      row[scoreIdx] || '',
+      row[rankIdx] || '',
+    ]);
+
+    console.log(`  Old IEDB MHC-II ${label}: ${rows.length} rows`);
+    return { success: true, columns, rows };
+  };
+
+  onProgress?.(0, 2, 'Firing Old IEDB MHC-II calls (canonical + mutated)...');
+  const stagger = (ms: number) => new Promise(r => setTimeout(r, ms));
+  const [canonResult, mutResult] = await Promise.all([
+    stagger(0).then(() => mhciiSingle('canonical', canonical)).then(r => { onProgress?.(1, 2, 'MHC-II canonical done'); return r; }),
+    stagger(1000).then(() => mhciiSingle('mutated', mutated)).then(r => { onProgress?.(2, 2, 'MHC-II mutated done'); return r; }),
+  ]);
+
+  return { canonical: canonResult, mutated: mutResult };
+}
+
+/**
  * Step 5: MHC-I Epitope Prediction (NetMHCpan 4.1 EL+BA)
  */
 export async function step5MHCI(
@@ -265,7 +369,343 @@ export async function step5MHCI(
 }
 
 /**
- * Step 6: MHC-II Epitope Prediction (NetMHCIIpan 4.1)
+ * Step 4: MHC-I Epitope Prediction (NetMHCpan 4.1) — standalone
+ */
+export async function step4MHCI(
+  geneName: string,
+  canonical: string,
+  mutated: string,
+  onProgress?: (current: number, total: number, message: string) => void
+): Promise<{ canonical: IEDBResult; mutated: IEDBResult }> {
+  const mhciSingle = async (label: string, seq: string): Promise<IEDBResult> => {
+    const chunks = chunkSequence(seq);
+    const chunkResults: IEDBResult[] = [];
+    for (let ci = 0; ci < chunks.length; ci++) {
+      const chunk = chunks[ci];
+      const chunkLabel = chunks.length > 1 ? `chunk ${ci+1}/${chunks.length}` : label;
+      const fasta = `>${geneName}_${label}_chunk${ci}\n${chunk}`;
+      chunkResults.push(await iedbPost(
+        {
+          pipeline_title: `${geneName} MHC-I ${chunkLabel}`,
+          run_stage_range: [1, 1],
+          stages: [{
+            stage_number: 1,
+            tool_group: 'mhci',
+            input_sequence_text: fasta,
+            input_parameters: {
+              alleles: MHC_I_27,
+              peptide_length_range: [9, 9],
+              predictors: [
+                { type: 'binding', method: 'netmhcpan_ba' },
+                { type: 'processing', method: 'basic_processing', mhc_binding_method: 'netmhcpan_ba', proteasome: 'immuno', tap_precursor: 1, tap_alpha: 0.2 },
+                { type: 'immunogenicity', mask_choice: 'by_allele' },
+              ],
+            },
+          }],
+        },
+        `MHC-I ${chunkLabel}`
+      ));
+    }
+    return chunks.length > 1 ? mergeIEDBResults(chunkResults) : chunkResults[0];
+  };
+
+  onProgress?.(0, 2, 'Firing MHC-I calls (canonical + mutated)...');
+  const stagger = (ms: number) => new Promise(r => setTimeout(r, ms));
+  const [canonResult, mutResult] = await Promise.all([
+    stagger(0).then(() => mhciSingle('canonical', canonical)).then(r => { onProgress?.(1, 2, 'MHC-I canonical done'); return r; }),
+    stagger(1000).then(() => mhciSingle('mutated', mutated)).then(r => { onProgress?.(2, 2, 'MHC-I mutated done'); return r; }),
+  ]);
+
+  return { canonical: canonResult, mutated: mutResult };
+}
+
+/**
+ * Step 5: MHC-II Epitope Prediction (NetMHCIIpan 4.1) — standalone
+ */
+export async function step5MHCII(
+  geneName: string,
+  canonical: string,
+  mutated: string,
+  onProgress?: (current: number, total: number, message: string) => void
+): Promise<{ canonical: IEDBResult; mutated: IEDBResult }> {
+  const results: { canonical: IEDBResult; mutated: IEDBResult } = {
+    canonical: { success: false, columns: [], rows: [] },
+    mutated: { success: false, columns: [], rows: [] },
+  };
+
+  // Build all jobs: canonical bind, canonical proc, mutated bind, mutated proc
+  const jobs: { label: 'canonical' | 'mutated'; type: 'bind' | 'proc'; promise: Promise<IEDBResult> }[] = [];
+  for (const [label, seq] of [['canonical', canonical], ['mutated', mutated]] as const) {
+    const chunks = chunkSequence(seq);
+    for (let ci = 0; ci < chunks.length; ci++) {
+      const chunk = chunks[ci];
+      const chunkLabel = chunks.length > 1 ? `${label} chunk ${ci+1}/${chunks.length}` : label;
+      const fasta = `>${geneName}_${label}_chunk${ci}\n${chunk}`;
+      jobs.push({
+        label, type: 'bind',
+        promise: iedbPost({ pipeline_title: `${geneName} MHC-II Binding ${chunkLabel}`, run_stage_range: [1, 1], stages: [{ stage_number: 1, tool_group: 'mhcii', input_sequence_text: fasta, input_parameters: { alleles: MHC_II_27, peptide_length_range: [15, 15], predictors: [{ type: 'binding', method: 'netmhciipan_el' }, { type: 'binding', method: 'netmhciipan_ba' }] } }] }, `MHC-II Binding ${chunkLabel}`),
+      });
+      jobs.push({
+        label, type: 'proc',
+        promise: iedbPost({ pipeline_title: `${geneName} MHC-II Processing ${chunkLabel}`, run_stage_range: [1, 1], stages: [{ stage_number: 1, tool_group: 'mhcii', input_sequence_text: fasta, input_parameters: { alleles: MHC_II_27, peptide_length_range: [15, 15], predictors: [{ type: 'processing', method: 'mhciinp' }] } }] }, `MHC-II Processing ${chunkLabel}`),
+      });
+    }
+  }
+
+  const totalCalls = jobs.length;
+  onProgress?.(0, totalCalls, `Firing ${totalCalls} MHC-II calls (binding + processing)...`);
+  const stagger = (ms: number) => new Promise(r => setTimeout(r, ms));
+  const allPromises = jobs.map((j, idx) =>
+    stagger(idx * 1000).then(() => j.promise).then(r => {
+      onProgress?.(idx + 1, totalCalls, `MHC-II ${j.type === 'bind' ? 'binding' : 'processing'} ${j.label} ${idx+1}/${totalCalls}`);
+      return { label: j.label, jobType: j.type, result: r };
+    })
+  );
+
+  const settled = await Promise.all(allPromises);
+
+  const bindResults: Record<string, IEDBResult[]> = { canonical: [], mutated: [] };
+  const procResults: Record<string, IEDBResult[]> = { canonical: [], mutated: [] };
+  for (const r of settled) {
+    if (r.jobType === 'bind') bindResults[r.label].push(r.result);
+    else procResults[r.label].push(r.result);
+  }
+
+  for (const label of ['canonical', 'mutated'] as const) {
+    const binds = bindResults[label];
+    const procs = procResults[label];
+    if (binds.length === 0) continue;
+    const mergedBind = binds.length > 1 ? mergeIEDBResults(binds) : binds[0];
+    const mergedProc = procs.length > 0 ? (procs.length > 1 ? mergeIEDBResults(procs) : procs[0]) : null;
+
+    if (mergedBind.success && mergedProc?.success) {
+      const procMap = new Map<string, Record<string, string>>();
+      for (const row of mergedProc.rows) {
+        const key = `${row[mergedProc.columns.indexOf('peptide')]}_${row[mergedProc.columns.indexOf('allele')]}`;
+        const dict: Record<string, string> = {};
+        mergedProc.columns.forEach((c, i) => (dict[c] = row[i]));
+        procMap.set(key, dict);
+      }
+      results[label] = {
+        success: true,
+        columns: [...mergedBind.columns, 'n_motif', 'c_motif', 'cleavage_probability_score', 'cleavage_probability_percentile_rank'],
+        rows: mergedBind.rows.map((row) => {
+          const key = `${row[mergedBind.columns.indexOf('peptide')]}_${row[mergedBind.columns.indexOf('allele')]}`;
+          const proc = procMap.get(key) || {};
+          return [...row, proc.n_motif || '', proc.c_motif || '', proc.cleavage_probability_score || '', proc.cleavage_probability_percentile_rank || ''];
+        }),
+      };
+    } else {
+      results[label] = mergedBind;
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Step 6: B-cell Epitope Prediction (BepiPred 3.0) — standalone
+ */
+export async function step6BCell(
+  geneName: string,
+  canonical: string,
+  mutated: string,
+  onProgress?: (current: number, total: number, message: string) => void
+): Promise<{ canonical: IEDBResult; mutated: IEDBResult }> {
+  const bcellSingle = async (label: string, seq: string): Promise<IEDBResult> => {
+    const chunks = chunkSequence(seq);
+    const chunkResults: IEDBResult[] = [];
+    for (let ci = 0; ci < chunks.length; ci++) {
+      const chunk = chunks[ci];
+      const chunkLabel = chunks.length > 1 ? `chunk ${ci+1}/${chunks.length}` : label;
+      const fasta = `>${geneName}_${label}_chunk${ci}\n${chunk}`;
+      const res = await iedbPost(
+        {
+          pipeline_title: `${geneName} B-cell ${chunkLabel}`,
+          run_stage_range: [1, 1],
+          stages: [{
+            stage_number: 1,
+            tool_group: 'bcell_sequence',
+            input_sequence_text: fasta,
+            input_parameters: {
+              predictors: [{ type: 'epitope', method: 'bepipred3', window_size: 9, scoring: 'majority_vote', include_seq_len_esm: true }],
+            },
+          }],
+        },
+        `B-cell ${chunkLabel}`
+      );
+      if (res.success) chunkResults.push(res);
+    }
+    return chunks.length > 1 && chunkResults.length > 0 ? mergeIEDBResults(chunkResults) : chunkResults[0] || { success: false, columns: [], rows: [] };
+  };
+
+  onProgress?.(0, 2, 'Firing B-cell calls (canonical + mutated)...');
+  const stagger = (ms: number) => new Promise(r => setTimeout(r, ms));
+  const [canonResult, mutResult] = await Promise.all([
+    stagger(0).then(() => bcellSingle('canonical', canonical)).then(r => { onProgress?.(1, 2, 'B-cell canonical done'); return r; }),
+    stagger(1000).then(() => bcellSingle('mutated', mutated)).then(r => { onProgress?.(2, 2, 'B-cell mutated done'); return r; }),
+  ]);
+
+  return { canonical: canonResult, mutated: mutResult };
+}
+
+/**
+ * Combined: MHC-I + MHC-II via fully concurrent IEDB calls.
+ * IEDB's combined multi-stage pipeline has a "list index out of range" bug,
+ * so we make independent calls for MHC-I and MHC-II.
+ * All IEDB submissions are fired concurrently for maximum speed.
+ */
+export async function step4_5MHCIAndII(
+  geneName: string,
+  canonical: string,
+  mutated: string,
+  onProgress?: (current: number, total: number, message: string) => void
+): Promise<{
+  mhci: { canonical: IEDBResult; mutated: IEDBResult };
+  mhcii: { canonical: IEDBResult; mutated: IEDBResult };
+}> {
+  // ─── MHC-I: fire canonical + mutated concurrently ───
+  const mhciSingle = async (label: string, seq: string): Promise<IEDBResult> => {
+    const chunks = chunkSequence(seq);
+    const chunkResults: IEDBResult[] = [];
+    for (let ci = 0; ci < chunks.length; ci++) {
+      const chunk = chunks[ci];
+      const chunkLabel = chunks.length > 1 ? `chunk ${ci+1}/${chunks.length}` : label;
+      const fasta = `>${geneName}_${label}_chunk${ci}\n${chunk}`;
+      chunkResults.push(await iedbPost(
+        {
+          pipeline_title: `${geneName} MHC-I ${chunkLabel}`,
+          run_stage_range: [1, 1],
+          stages: [{
+            stage_number: 1,
+            tool_group: 'mhci',
+            input_sequence_text: fasta,
+            input_parameters: {
+              alleles: MHC_I_27,
+              peptide_length_range: [9, 9],
+              predictors: [
+                { type: 'binding', method: 'netmhcpan_el' },
+                { type: 'binding', method: 'netmhcpan_ba' },
+                { type: 'processing', method: 'basic_processing', mhc_binding_method: 'netmhcpan_ba', proteasome: 'immuno', tap_precursor: 1, tap_alpha: 0.2 },
+                { type: 'immunogenicity', mask_choice: 'by_allele' },
+              ],
+            },
+          }],
+        },
+        `MHC-I ${chunkLabel}`
+      ));
+    }
+    return chunks.length > 1 ? mergeIEDBResults(chunkResults) : chunkResults[0];
+  };
+
+  const mhciCanonP = mhciSingle('canonical', canonical);
+  const mhciMutP = mhciSingle('mutated', mutated);
+
+  // ─── MHC-II: fire canonical binding + processing + mutated binding + processing concurrently ───
+  const mhciiJobs: { label: 'canonical' | 'mutated'; type: 'bind' | 'proc'; promise: Promise<IEDBResult> }[] = [];
+  for (const [label, seq] of [['canonical', canonical], ['mutated', mutated]] as const) {
+    const chunks = chunkSequence(seq);
+    for (let ci = 0; ci < chunks.length; ci++) {
+      const chunk = chunks[ci];
+      const chunkLabel = chunks.length > 1 ? `${label} chunk ${ci+1}/${chunks.length}` : label;
+      const fasta = `>${geneName}_${label}_chunk${ci}\n${chunk}`;
+
+      // Binding
+      mhciiJobs.push({
+        label, type: 'bind',
+        promise: iedbPost(
+          { pipeline_title: `${geneName} MHC-II Binding ${chunkLabel}`, run_stage_range: [1, 1], stages: [{ stage_number: 1, tool_group: 'mhcii', input_sequence_text: fasta, input_parameters: { alleles: MHC_II_27, peptide_length_range: [15, 15], predictors: [{ type: 'binding', method: 'netmhciipan_el' }, { type: 'binding', method: 'netmhciipan_ba' }] } }] },
+          `MHC-II Binding ${chunkLabel}`
+        ),
+      });
+
+      // Processing (independent — doesn't need binding results)
+      mhciiJobs.push({
+        label, type: 'proc',
+        promise: iedbPost(
+          { pipeline_title: `${geneName} MHC-II Processing ${chunkLabel}`, run_stage_range: [1, 1], stages: [{ stage_number: 1, tool_group: 'mhcii', input_sequence_text: fasta, input_parameters: { alleles: MHC_II_27, peptide_length_range: [15, 15], predictors: [{ type: 'processing', method: 'mhciinp' }] } }] },
+          `MHC-II Processing ${chunkLabel}`
+        ),
+      });
+    }
+  }
+
+  // Fire IEDB calls staggered by 1s for fair usage
+  const totalCalls = 2 + mhciiJobs.length;
+  onProgress?.(0, totalCalls, `Firing ${totalCalls} IEDB calls (1s stagger)...`);
+
+  const stagger = (ms: number) => new Promise(r => setTimeout(r, ms));
+  const allPromises = [
+    stagger(0).then(() => mhciCanonP).then(r => { onProgress?.(1, totalCalls, `MHC-I canonical 1/${totalCalls}`); return { type: 'mhci', label: 'canonical', result: r }; }),
+    stagger(1000).then(() => mhciMutP).then(r => { onProgress?.(2, totalCalls, `MHC-I mutated 2/${totalCalls}`); return { type: 'mhci', label: 'mutated', result: r }; }),
+    ...mhciiJobs.map((j, idx) =>
+      stagger((idx + 2) * 1000).then(() => j.promise).then(r => {
+        const num = idx + 3;
+        onProgress?.(num, totalCalls, `MHC-II ${j.type === 'bind' ? 'binding' : 'processing'} ${num}/${totalCalls}`);
+        return { type: 'mhcii', label: j.label, jobType: j.type, result: r };
+      })
+    ),
+  ];
+
+  const settled = await Promise.all(allPromises);
+
+  // ─── Assemble results ───
+  const mhciResults: Record<string, IEDBResult> = {};
+  const mhciiBind: Record<string, IEDBResult[]> = { canonical: [], mutated: [] };
+  const mhciiProc: Record<string, IEDBResult[]> = { canonical: [], mutated: [] };
+
+  for (const r of settled) {
+    if (r.type === 'mhci') {
+      mhciResults[r.label] = (r as { result: IEDBResult }).result;
+    } else if (r.type === 'mhcii') {
+      const jobType = (r as unknown as { jobType: string }).jobType;
+      const label = r.label;
+      if (jobType === 'bind') mhciiBind[label].push((r as { result: IEDBResult }).result);
+      else mhciiProc[label].push((r as { result: IEDBResult }).result);
+    }
+  }
+
+  const mhci = { canonical: mhciResults['canonical'] || { success: false, columns: [], rows: [] }, mutated: mhciResults['mutated'] || { success: false, columns: [], rows: [] } };
+
+  // Merge MHC-II binding + processing per label
+  const mhcii: { canonical: IEDBResult; mutated: IEDBResult } = {
+    canonical: { success: false, columns: [], rows: [] },
+    mutated: { success: false, columns: [], rows: [] },
+  };
+  for (const label of ['canonical', 'mutated'] as const) {
+    const binds = mhciiBind[label];
+    const procs = mhciiProc[label];
+    if (binds.length === 0) continue;
+    const mergedBind = binds.length > 1 ? mergeIEDBResults(binds) : binds[0];
+    const mergedProc = procs.length > 0 ? (procs.length > 1 ? mergeIEDBResults(procs) : procs[0]) : null;
+
+    if (mergedBind.success && mergedProc?.success) {
+      const procMap = new Map<string, Record<string, string>>();
+      for (const row of mergedProc.rows) {
+        const key = `${row[mergedProc.columns.indexOf('peptide')]}_${row[mergedProc.columns.indexOf('allele')]}`;
+        const dict: Record<string, string> = {};
+        mergedProc.columns.forEach((c, i) => (dict[c] = row[i]));
+        procMap.set(key, dict);
+      }
+      mhcii[label] = {
+        success: true,
+        columns: [...mergedBind.columns, 'n_motif', 'c_motif', 'cleavage_probability_score', 'cleavage_probability_percentile_rank'],
+        rows: mergedBind.rows.map((row) => {
+          const key = `${row[mergedBind.columns.indexOf('peptide')]}_${row[mergedBind.columns.indexOf('allele')]}`;
+          const proc = procMap.get(key) || {};
+          return [...row, proc.n_motif || '', proc.c_motif || '', proc.cleavage_probability_score || '', proc.cleavage_probability_percentile_rank || ''];
+        }),
+      };
+    } else {
+      mhcii[label] = mergedBind;
+    }
+  }
+
+  return { mhci, mhcii };
+}
+
+/**
+ * Step 6: MHC-II Epitope Prediction (NetMHCIIpan 4.1) — standalone fallback
  */
 export async function step6MHCII(
   geneName: string,
@@ -378,62 +818,46 @@ export async function step6MHCII(
 export async function step7BCell(
   geneName: string,
   canonical: string,
-  mutated: string
+  mutated: string,
+  onProgress?: (current: number, total: number, message: string) => void
 ): Promise<{ canonical: IEDBResult; mutated: IEDBResult }> {
-  const results: { canonical: IEDBResult; mutated: IEDBResult } = {
-    canonical: { success: false, columns: [], rows: [] },
-    mutated: { success: false, columns: [], rows: [] },
-  };
-
-  for (const [label, seq] of [['canonical', canonical], ['mutated', mutated]] as const) {
-    console.log(`\n=== B-cell BepiPred 3.0 — ${label.toUpperCase()} === (${seq.length} aa)`);
-
+  const bcellSingle = async (label: string, seq: string): Promise<IEDBResult> => {
     const chunks = chunkSequence(seq);
     const chunkResults: IEDBResult[] = [];
-
     for (let ci = 0; ci < chunks.length; ci++) {
       const chunk = chunks[ci];
-      const chunkLabel = chunks.length > 1 ? `${label} chunk ${ci+1}/${chunks.length}` : label;
+      const chunkLabel = chunks.length > 1 ? `chunk ${ci+1}/${chunks.length}` : label;
       const fasta = `>${geneName}_${label}_chunk${ci}\n${chunk}`;
-      console.log(`  Chunk ${ci+1}/${chunks.length}: ${chunk.length} aa`);
-
       const res = await iedbPost(
         {
           pipeline_title: `${geneName} B-cell ${chunkLabel}`,
           run_stage_range: [1, 1],
-          stages: [
-            {
-              stage_number: 1,
-              tool_group: 'bcell_sequence',
-              input_sequence_text: fasta,
-              input_parameters: {
-                predictors: [
-                  {
-                    type: 'epitope',
-                    method: 'bepipred3',
-                    window_size: 9,
-                    scoring: 'majority_vote',
-                    include_seq_len_esm: true,
-                  },
-                ],
-              },
+          stages: [{
+            stage_number: 1,
+            tool_group: 'bcell_sequence',
+            input_sequence_text: fasta,
+            input_parameters: {
+              predictors: [{ type: 'epitope', method: 'bepipred3', window_size: 9, scoring: 'majority_vote', include_seq_len_esm: true }],
             },
-          ],
+          }],
         },
         `B-cell ${chunkLabel}`
       );
-
-      if (res.success) {
-        chunkResults.push(res);
-      }
+      if (res.success) chunkResults.push(res);
     }
+    return chunks.length > 1 && chunkResults.length > 0 ? mergeIEDBResults(chunkResults) : chunkResults[0] || { success: false, columns: [], rows: [] };
+  };
 
-    if (chunkResults.length > 0) {
-      results[label] = chunks.length > 1 ? mergeIEDBResults(chunkResults) : chunkResults[0];
-    }
-  }
+  // Fire canonical + mutated concurrently with 1s stagger
+  const stagger = (ms: number) => new Promise(r => setTimeout(r, ms));
+  onProgress?.(0, 2, 'Firing B-cell calls (canonical + mutated)...');
 
-  return results;
+  const [canonResult, mutResult] = await Promise.all([
+    stagger(0).then(() => bcellSingle('canonical', canonical)).then(r => { onProgress?.(1, 2, 'B-cell: canonical done'); return r; }),
+    stagger(1000).then(() => bcellSingle('mutated', mutated)).then(r => { onProgress?.(2, 2, 'B-cell: mutated done'); return r; }),
+  ]);
+
+  return { canonical: canonResult, mutated: mutResult };
 }
 
 /**

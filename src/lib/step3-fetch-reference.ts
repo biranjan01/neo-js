@@ -184,27 +184,34 @@ export async function step3FetchReference(geneName: string): Promise<Step3Result
 }
 
 /**
- * Generate mutated sequence by applying mutations to reference
+ * Generate mutated sequence by applying the highest-frequency mutation
+ * at each position. Ref_AA is corrected to match the actual wild-type
+ * so compound mutations (e.g., R43H when wild-type is L) are treated
+ * as L→H. Stop codons (Alt_AA = '*') are excluded.
  */
 export function generateMutatedSequence(
   reference: string,
-  mutations: { Position: number; Ref_AA: string; Alt_AA: string }[]
+  mutations: { Position: number; Ref_AA: string; Alt_AA: string; Patient_Count?: number }[]
 ): string {
   const seq = reference.split('');
 
-  // Deduplicate by position, keep first occurrence
-  const seen = new Set<number>();
-  let applied = 0;
+  // Group by position, pick highest frequency Alt_AA (skip stop codons)
+  const bestAltAtPos = new Map<number, { Alt_AA: string; count: number }>();
 
-  const sorted = [...mutations].sort((a, b) => a.Position - b.Position);
-
-  for (const mut of sorted) {
+  for (const mut of mutations) {
     const pos = mut.Position - 1; // 0-indexed
     if (pos < 0 || pos >= seq.length) continue;
-    if (seen.has(pos)) continue;
-    seen.add(pos);
+    if (mut.Alt_AA === '*') continue; // skip stop codons
+    const count = mut.Patient_Count ?? 1;
+    const existing = bestAltAtPos.get(pos);
+    if (!existing || count > existing.count) {
+      bestAltAtPos.set(pos, { Alt_AA: mut.Alt_AA, count });
+    }
+  }
 
-    if (seq[pos] === mut.Ref_AA) {
+  let applied = 0;
+  for (const [pos, mut] of bestAltAtPos) {
+    if (seq[pos] !== mut.Alt_AA) {
       seq[pos] = mut.Alt_AA;
       applied++;
     }
