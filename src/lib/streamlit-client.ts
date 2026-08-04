@@ -1,8 +1,8 @@
-const STREAMLIT_VAXIJEN = process.env.STREAMLIT_VAXIJEN_URL || 'https://vaxijen-app-xrdf7xh3y9fbxiqsr9zfva.streamlit.app';
-const STREAMLIT_IMMUNO = process.env.STREAMLIT_IMMUNO_URL || '';
-const STREAMLIT_ALLERTOP = process.env.STREAMLIT_ALLERTOP_URL || '';
-const STREAMLIT_TOXINPRED = process.env.STREAMLIT_TOXINPRED_URL || '';
-const STREAMLIT_POPCOVERAGE = process.env.STREAMLIT_POPCOVERAGE_URL || '';
+const STREAMLIT_VAXIJEN = process.env.STREAMLIT_VAXIJEN_URL || 'https://antigenicity.streamlit.app';
+const STREAMLIT_IMMUNO = process.env.STREAMLIT_IMMUNO_URL || 'https://immunogenicity.streamlit.app';
+const STREAMLIT_ALLERTOP = process.env.STREAMLIT_ALLERTOP_URL || 'https://allergenicity.streamlit.app';
+const STREAMLIT_TOXINPRED = process.env.STREAMLIT_TOXINPRED_URL || 'https://toxicities.streamlit.app';
+const STREAMLIT_POPCOVERAGE = process.env.STREAMLIT_POPCOVERAGE_URL || 'https://popcoverage.streamlit.app';
 
 export interface StepResult {
   sequence: string;
