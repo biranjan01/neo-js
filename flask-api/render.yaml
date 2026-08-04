@@ -1,11 +1,10 @@
 services:
   - type: web
     name: neo-js-api
-    runtime: python
+    runtime: docker
     plan: free
-    buildCommand: pip install -r requirements.txt && python -m camoufox fetch
-    startCommand: gunicorn server:app --bind 0.0.0.0:$PORT --timeout 600
+    dockerfilePath: Dockerfile
     envVars:
-      - key: PYTHON_VERSION
-        value: "3.11"
+      - key: PORT
+        value: "5000"
     healthCheckPath: /health
