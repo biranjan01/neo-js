@@ -1,7 +1,12 @@
-import os, sys, json, re, time, uuid, tempfile, subprocess
+import os, sys, json, re, time, uuid, tempfile, subprocess, traceback
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
+
+@app.errorhandler(Exception)
+def handle_exception(e):
+    traceback.print_exc()
+    return jsonify({"error": str(e)}), 500
 
 # ─── VaxiJen 2 (Antigenicity) ───
 VAXIJEN_SCRIPT_URL = "https://www.ddg-pharmfac.net/vaxijen/scripts/VaxiJen_scripts/VaxiJen3.pl"
