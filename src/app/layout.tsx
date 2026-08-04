@@ -17,7 +17,7 @@ const SITE_URL = "https://github.com/biranjan01/neopeptide";
 export const metadata: Metadata = {
   title: "NeoPeptide — Neoantigen Vaccine Prediction Pipeline",
   description:
-    "Automated 15-step computational pipeline for neoantigen vaccine candidate identification in cancer immunotherapy research. Docker-based, open source.",
+    "Automated 14-step computational pipeline for neoantigen vaccine candidate identification in cancer immunotherapy research. Cloud-based, open source.",
   keywords: [
     "neoantigen",
     "vaccine design",
@@ -26,7 +26,7 @@ export const metadata: Metadata = {
     "MHC binding prediction",
     "NetMHCpan",
     "epitope prediction",
-    "Docker",
+    "Vercel",
     "open source",
   ],
   authors: [{ name: "Ravi" }, { name: "S. Shriya" }],

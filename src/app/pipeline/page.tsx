@@ -150,6 +150,10 @@ function PipelineInner() {
 
   useEffect(() => { checkSavedState(); }, [checkSavedState]);
 
+  useEffect(() => {
+    fetch('/api/warmup').catch(() => {});
+  }, []);
+
   const handleDeleteState = useCallback(async (gene: string) => {
     try {
       await fetch(`/api/pipeline-state?gene=${encodeURIComponent(gene)}`, { method: 'DELETE' });
@@ -627,7 +631,7 @@ function PipelineInner() {
       }
       if (peptides.length === 0) throw new Error('No peptides to analyze');
 
-      const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+      const BACKEND = '';
 
       // ─── Step 8: Pre-filter by IC50 + VaxiJen 3.0 Immunogenicity ───
       updateStep(8, 'running', `Predicting immunogenicity for ${peptides.length} peptides via VaxiJen 3.0...`);
@@ -845,7 +849,7 @@ function PipelineInner() {
         }
 
         if (popPairs.length > 0) {
-          const popRes = await fetch('http://localhost:8000/api/population_coverage', {
+          const popRes = await fetch('/api/population', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({

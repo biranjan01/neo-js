@@ -5,8 +5,7 @@ import re
 
 # adding dependencies to the Python path
 project_dir = os.path.dirname(os.path.realpath(__file__))
-deps = os.path.join(project_dir, "deps")
-sys.path.append(os.path.join(deps, "population-coverage-pickle"))
+sys.path.insert(0, project_dir)
 
 from population_coverage_pickle import population_coverage, country_ethnicity, ethnicity as population_by_ethnicity
 
