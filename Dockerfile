@@ -1,5 +1,6 @@
 FROM python:3.11-slim
 
+# v2 - full browser deps for Camoufox
 RUN apt-get update && apt-get install -y --no-install-recommends \
     xvfb \
     libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
@@ -8,8 +9,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libcairo2 libasound2 libglib2.0-0 \
     libgtk-3-0 libx11-xcb1 libxcb-dri3-0 libxss1 libxtst6 fonts-liberation \
     libwayland-client0 libwayland-egl1 libwayland-server0 \
-    libxshmfence1 libx11-6 libx11-xcb1 libxcb1 \
-    libexpat1 libdbus-glib-1-2 libxt6 libdrm2
+    libxshmfence1 libx11-6 libxcb1 \
+    libexpat1 libdbus-glib-1-2 libxt6 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
