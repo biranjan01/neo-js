@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: neo-js-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt && python -c "from camoufox import fetch; fetch()"
+    startCommand: gunicorn server:app --bind 0.0.0.0:$PORT --timeout 600
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11"
+    healthCheckPath: /health

@@ -1,0 +1,6 @@
+flask==3.1.0
+httpx
+camoufox[geoip]
+pandas
+numpy
+matplotlib
