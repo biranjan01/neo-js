@@ -6,7 +6,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libdrm2 libdbus-1-3 libxkbcommon0 libatspi2.0-0 libxcomposite1 \
     libxdamage1 libxfixes3 libxrandr2 libgbm1 libpango-1.0-0 \
     libcairo2 libasound2 libglib2.0-0 \
-    libx11-xcb1 libxcb-dri3-0 libxss1 libxtst6 fonts-liberation \
+    libgtk-3-0 libx11-xcb1 libxcb-dri3-0 libxss1 libxtst6 fonts-liberation \
+    libwayland-client0 libwayland-egl1 libwayland-server0 \
+    libxshmfence1 libx11-6 libx11-xcb1 libxcb1 \
+    libexpat1 libdbus-glib-1-2 libxt6 libdrm2
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
